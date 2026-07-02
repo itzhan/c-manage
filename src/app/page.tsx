@@ -19,6 +19,7 @@ const FREEZE_AFTER = 300;
 const fmtQ = (q: number) => "$" + (q / 500000).toFixed(2);
 const fmtT = (ts: number | null) => ts ? new Date(ts * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "-";
 function incName(name: string) { const m = name.match(/^(.*?)(\d+)$/); if (!m) return name + "0001"; return m[1] + String(parseInt(m[2], 10) + 1).padStart(m[2].length, "0"); }
+function countLines(text: string) { return text.split("\n").map(s => s.trim()).filter(Boolean).length; }
 
 const PRESETS: [string, string][] = [
   ["Claude Opus", "claude-opus-4-6,claude-opus-4-7,claude-opus-4-8"],
@@ -48,7 +49,14 @@ export default function Page() {
   const [impBusy, setImpBusy] = useState(false);
   const [paused, setPaused] = useState(false);
   const [showAdv, setShowAdv] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval>>(null);
+
+  // Use refs for timer callback to avoid re-creating interval on every state change
+  const lidRef = useRef(lid);
+  const pgRef = useRef(pg);
+  const pausedRef = useRef(paused);
+  lidRef.current = lid;
+  pgRef.current = pg;
+  pausedRef.current = paused;
 
   const fPool = useCallback(async () => { const r = await fetch("/api/keys").then(r => r.json()); if (r.success) { setPoolN(r.data.total); setPoolKeys(r.data.keys); } }, []);
   const fLines = useCallback(async () => { const r = await fetch("/api/lines").then(r => r.json()); if (r.success) setLines(r.data); return r.data as Line[]; }, []);
@@ -61,18 +69,29 @@ export default function Page() {
     await fRecs(id, 1); setPg(1); await fLogs(id);
   }, [fRecs, fLogs]);
 
+  // Initial load
   useEffect(() => { (async () => { await fPool(); const ls = await fLines(); if (ls.length) { setLid(ls[0].id); await loadLine(ls[0].id, ls); } })(); }, []);
 
+  // Stable refresh function using refs — does NOT change identity on state updates
   const doRefresh = useCallback(async () => {
     await fetch("/api/refresh", { method: "POST" });
-    const ls = await fLines(); await fPool();
-    if (lid) { await fRecs(lid, pg); await fLogs(lid); const l = ls.find((x: Line) => x.id === lid); if (l) { setCfg(l.config); setAutoOn(!!l.autoEnabled); } }
-  }, [lid, pg, fLines, fRecs, fLogs, fPool]);
+    const ls = await fLines();
+    await fPool();
+    const currentLid = lidRef.current;
+    const currentPg = pgRef.current;
+    if (currentLid) {
+      await fRecs(currentLid, currentPg);
+      await fLogs(currentLid);
+      const l = ls.find((x: Line) => x.id === currentLid);
+      if (l) { setCfg(l.config); setAutoOn(!!l.autoEnabled); }
+    }
+  }, [fLines, fPool, fRecs, fLogs]);
 
+  // Single stable interval — only recreated when paused changes
   useEffect(() => {
-    if (paused) { if (timerRef.current) clearInterval(timerRef.current); return; }
-    timerRef.current = setInterval(doRefresh, 10000);
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    if (paused) return;
+    const t = setInterval(doRefresh, 10000);
+    return () => clearInterval(t);
   }, [paused, doRefresh]);
 
   const saveCfg = async (c: Record<string, string>) => { setCfg(c); if (lid) fetch(`/api/lines/${lid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: c }) }); };
@@ -98,28 +117,50 @@ export default function Page() {
   const clrLogs = async () => { if (!lid) return; await fetch(`/api/lines/${lid}/logs`, { method: "DELETE" }); setLogs([]); };
 
   const totalPg = Math.ceil(recTotal / 10);
+  const pendingKeyCount = countLines(newKeys);
 
   return (
     <div className="max-w-[960px] mx-auto p-6 space-y-4">
       <h1 className="text-xl font-semibold">渠道上号中枢</h1>
 
+      {/* Key Pool */}
       <Card>
-        <CardHeader className="pb-3"><CardTitle className="flex items-center justify-between text-sm"><span>密钥池 (全局共享)</span><Badge variant="secondary">{poolN}</Badge></CardTitle></CardHeader>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center justify-between text-sm">
+            <span>密钥池 (全局共享)</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">剩余子弹:</span>
+              <Badge variant="secondary" className="text-base px-3 py-0.5">{poolN}</Badge>
+            </div>
+          </CardTitle>
+        </CardHeader>
         <CardContent className="space-y-3">
-          <Textarea placeholder={"sk-ant-api03-xxxx\n每行一个密钥"} value={newKeys} onChange={e => setNewKeys(e.target.value)} className="font-mono text-xs min-h-[100px]" />
-          <div className="flex gap-2">
-            <Button size="sm" onClick={addKeys}>追加到密钥池</Button>
+          <Textarea
+            placeholder={"sk-ant-api03-xxxx\n每行一个密钥"}
+            value={newKeys}
+            onChange={e => setNewKeys(e.target.value)}
+            className="font-mono text-xs resize-none"
+            style={{ height: "120px" }}
+          />
+          <div className="flex gap-2 items-center">
+            <Button size="sm" onClick={addKeys} disabled={pendingKeyCount === 0}>
+              追加到密钥池{pendingKeyCount > 0 && ` (${pendingKeyCount})`}
+            </Button>
             <Button size="sm" variant="destructive" onClick={clearPool}>清空</Button>
-            <Button size="sm" variant="ghost" onClick={() => setShowPool(!showPool)} className="ml-auto text-xs text-muted-foreground">{showPool ? "收起" : "展开"} ({poolN})</Button>
+            {pendingKeyCount > 0 && (
+              <span className="text-xs text-muted-foreground">将加入 {pendingKeyCount} 个密钥，加入后池中共 {poolN + pendingKeyCount} 个</span>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setShowPool(!showPool)} className="ml-auto text-xs text-muted-foreground">{showPool ? "收起" : "查看池中密钥"}</Button>
           </div>
-          {showPool && poolKeys.length > 0 && (
-            <div className="bg-muted/30 rounded p-2 max-h-[120px] overflow-y-auto font-mono text-[11px] text-muted-foreground">
-              {poolKeys.map((k, i) => <div key={i}>{i + 1}. {k}</div>)}
+          {showPool && (
+            <div className="bg-muted/30 rounded p-2 max-h-[150px] overflow-y-auto font-mono text-[11px] text-muted-foreground">
+              {poolKeys.length === 0 ? <span className="text-muted-foreground/50">池中暂无密钥</span> : poolKeys.map((k, i) => <div key={i}>{i + 1}. {k}</div>)}
             </div>
           )}
         </CardContent>
       </Card>
 
+      {/* Tab Bar */}
       <div className="flex items-center border-b border-border">
         {lines.map(l => (
           <div key={l.id} className={`group flex items-center gap-1.5 px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors ${l.id === lid ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}
@@ -135,6 +176,7 @@ export default function Page() {
 
       {lid && (
         <div className="space-y-4">
+          {/* Monitor */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3">
@@ -168,6 +210,7 @@ export default function Page() {
             </CardContent>
           </Card>
 
+          {/* Connection Config */}
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">连接配置</CardTitle></CardHeader>
             <CardContent className="space-y-3">
@@ -182,6 +225,7 @@ export default function Page() {
             </CardContent>
           </Card>
 
+          {/* Channel Config */}
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">渠道配置</CardTitle></CardHeader>
             <CardContent className="space-y-3">
@@ -216,6 +260,7 @@ export default function Page() {
             </CardContent>
           </Card>
 
+          {/* Auto Reload */}
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">自动上弹</CardTitle></CardHeader>
             <CardContent>
@@ -228,6 +273,7 @@ export default function Page() {
             </CardContent>
           </Card>
 
+          {/* Manual Import */}
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">手动导入</CardTitle></CardHeader>
             <CardContent>
@@ -239,6 +285,7 @@ export default function Page() {
             </CardContent>
           </Card>
 
+          {/* Logs */}
           <Card>
             <CardHeader className="pb-3"><div className="flex items-center justify-between"><CardTitle className="text-sm">日志</CardTitle><Button size="sm" variant="ghost" className="text-xs h-7" onClick={clrLogs}>清空</Button></div></CardHeader>
             <CardContent>
