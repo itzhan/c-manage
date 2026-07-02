@@ -10,7 +10,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const page = parseInt(url.searchParams.get("page") || "1");
   const pageSize = parseInt(url.searchParams.get("pageSize") || "10");
   const offset = (page - 1) * pageSize;
-  const rows = db.select().from(records).where(eq(records.lineId, lineId)).orderBy(desc(records.importedAt)).limit(pageSize).offset(offset).all();
+  const rows = db.select().from(records).where(eq(records.lineId, lineId)).orderBy(desc(records.id)).limit(pageSize).offset(offset).all();
   const [{ value: total }] = db.select({ value: count() }).from(records).where(eq(records.lineId, lineId)).all();
   const all = db.select().from(records).where(eq(records.lineId, lineId)).all();
   const totalQuota = all.reduce((s, r) => s + r.cachedQuota, 0);
