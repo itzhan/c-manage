@@ -1,0 +1,11 @@
+services:
+  c-manage:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3104:3104"
+    volumes:
+      - c-manage-data:/app/data
+
+volumes:
+  c-manage-data:
