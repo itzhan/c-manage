@@ -49,7 +49,6 @@ export default function Page() {
   const [paused, setPaused] = useState(false);
   const [showAdv, setShowAdv] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>(null);
-  const logEnd = useRef<HTMLDivElement>(null);
 
   const fPool = useCallback(async () => { const r = await fetch("/api/keys").then(r => r.json()); if (r.success) { setPoolN(r.data.total); setPoolKeys(r.data.keys); } }, []);
   const fLines = useCallback(async () => { const r = await fetch("/api/lines").then(r => r.json()); if (r.success) setLines(r.data); return r.data as Line[]; }, []);
@@ -63,7 +62,6 @@ export default function Page() {
   }, [fRecs, fLogs]);
 
   useEffect(() => { (async () => { await fPool(); const ls = await fLines(); if (ls.length) { setLid(ls[0].id); await loadLine(ls[0].id, ls); } })(); }, []);
-  useEffect(() => { logEnd.current?.scrollIntoView({ behavior: "smooth" }); }, [logs]);
 
   const doRefresh = useCallback(async () => {
     await fetch("/api/refresh", { method: "POST" });
@@ -248,7 +246,6 @@ export default function Page() {
                 {logs.length === 0 ? <p className="text-muted-foreground/50">等待操作...</p> : logs.map(l => (
                   <div key={l.id} className={l.level === "ok" ? "text-green-500" : l.level === "err" ? "text-red-500" : l.level === "warn" ? "text-yellow-500" : "text-blue-400"}>{l.message}</div>
                 ))}
-                <div ref={logEnd} />
               </div>
             </CardContent>
           </Card>
