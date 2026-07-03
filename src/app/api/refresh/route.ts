@@ -75,6 +75,7 @@ export async function POST() {
   const allLines = db.select().from(lines).all();
   const now = Math.floor(Date.now() / 1000);
   let updated = 0;
+  let cooldown = false;
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config);
@@ -100,13 +101,13 @@ export async function POST() {
     if (line.autoEnabled) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
       const latest = unfrozen.length > 0 ? unfrozen[unfrozen.length - 1] : null;
-      const shouldAutoImport = latest?.allDisabledSince && (now - latest.allDisabledSince >= FREEZE_AFTER);
-      if (shouldAutoImport) {
+      if (latest?.allDisabledSince) {
         db.update(records).set({ frozen: 1 }).where(eq(records.id, latest!.id)).run();
         await autoImportForLine(line.id, cfg, line.autoBatchSize);
+        cooldown = true;
       }
     }
   }
 
-  return Response.json({ success: true, data: { updated } });
+  return Response.json({ success: true, data: { updated, cooldown } });
 }

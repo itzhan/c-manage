@@ -73,8 +73,15 @@ export default function Page() {
   useEffect(() => { (async () => { await fPool(); const ls = await fLines(); if (ls.length) { setLid(ls[0].id); await loadLine(ls[0].id, ls); } })(); }, []);
 
   // Stable refresh function using refs — does NOT change identity on state updates
+  const cooldownRef = useRef(false);
   const doRefresh = useCallback(async () => {
-    await fetch("/api/refresh", { method: "POST" });
+    if (cooldownRef.current) return;
+    const resp = await fetch("/api/refresh", { method: "POST" });
+    const result = await resp.json().catch(() => ({}));
+    if (result?.data?.cooldown) {
+      cooldownRef.current = true;
+      setTimeout(() => { cooldownRef.current = false; }, 30000);
+    }
     const ls = await fLines();
     await fPool();
     const currentLid = lidRef.current;
