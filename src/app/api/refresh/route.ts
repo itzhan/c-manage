@@ -98,8 +98,11 @@ export async function POST() {
     }
 
     if (line.autoEnabled) {
-      const latest = db.select().from(records).where(eq(records.lineId, line.id)).orderBy(asc(records.frozen)).limit(1).all().find(r => !r.frozen);
-      if (latest?.allDisabledSince) {
+      const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
+      const latest = unfrozen.length > 0 ? unfrozen[unfrozen.length - 1] : null;
+      const shouldAutoImport = latest?.allDisabledSince && (now - latest.allDisabledSince >= FREEZE_AFTER);
+      if (shouldAutoImport) {
+        db.update(records).set({ frozen: 1 }).where(eq(records.id, latest!.id)).run();
         await autoImportForLine(line.id, cfg, line.autoBatchSize);
       }
     }
