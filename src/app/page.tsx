@@ -222,7 +222,11 @@ export default function Page() {
                   </TableRow>);
                 })}</TableBody></Table>
                 <div className="flex justify-end pt-2 text-sm font-semibold"><span className="text-muted-foreground mr-2">全部 {recTotal} 组 · {recKeys} 个密钥 · 总计:</span><span className="font-mono">{fmtQ(recQuota)}</span></div>
-                {totalPg > 1 && <div className="flex justify-center gap-1 pt-2">{Array.from({ length: totalPg }, (_, i) => (<Button key={i} size="sm" variant={pg === i + 1 ? "default" : "ghost"} className="h-7 w-7 p-0 text-xs" onClick={() => { setPg(i + 1); fRecs(lid, i + 1); }}>{i + 1}</Button>))}</div>}
+                {totalPg > 1 && <div className="flex items-center justify-center gap-2 pt-2">
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={pg <= 1} onClick={() => { setPg(pg - 1); fRecs(lid, pg - 1); }}>上一页</Button>
+                  <span className="text-xs text-muted-foreground tabular-nums">{pg} / {totalPg}</span>
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={pg >= totalPg} onClick={() => { setPg(pg + 1); fRecs(lid, pg + 1); }}>下一页</Button>
+                </div>}
               </>)}
             </CardContent>
           </Card>
