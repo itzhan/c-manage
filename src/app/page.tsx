@@ -139,14 +139,27 @@ export default function Page() {
   // Global import
   const doGlobalImport = async () => {
     setGdBusy(true); setGdResults([]);
-    const globalLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
-    const lineRatios: Record<string, number> = {};
-    for (const l of globalLines) {
-      lineRatios[String(l.id)] = parseInt(l.config?.globalRatio) || 100;
+    const gLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
+    // Group lines
+    const groups = new Map<string, Line[]>();
+    for (const l of gLines) {
+      const g = l.config?.globalGroup || "默认";
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g)!.push(l);
     }
-    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: gdBatch, mode: "global", lineRatios }) }).then(r => r.json());
+    // Import per group with its own batch size
+    const allResults: typeof gdResults = [];
+    for (const [, groupLines] of groups) {
+      const groupBatch = parseInt(groupLines[0]?.config?.globalGroupBatch) || 10;
+      const lineRatios: Record<string, number> = {};
+      for (const l of groupLines) {
+        lineRatios[String(l.id)] = parseInt(l.config?.globalRatio) || 100;
+      }
+      const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: groupBatch, mode: "global", lineRatios }) }).then(r => r.json());
+      if (r.success) allResults.push(...r.data.results);
+    }
+    setGdResults(allResults);
     setGdBusy(false);
-    if (r.success) setGdResults(r.data.results);
     fPool(); fLines();
   };
 
@@ -277,15 +290,10 @@ export default function Page() {
 
               {/* Manual import */}
               <div className="flex items-center gap-3">
-                <div className="w-[140px]">
-                  <Label className="text-xs">手动导入数量</Label>
-                  <Input type="number" min={1} value={gdBatch} onChange={e => setGdBatch(parseInt(e.target.value) || 1)} />
-                </div>
-                <div className="mt-5">
-                  <Button onClick={doGlobalImport} disabled={gdBusy || poolN === 0 || globalLines.length === 0}>
-                    {gdBusy ? "导入中..." : `全局导入 (池: ${poolN})`}
-                  </Button>
-                </div>
+                <Button onClick={doGlobalImport} disabled={gdBusy || poolN === 0 || globalLines.length === 0}>
+                  {gdBusy ? "导入中..." : `全局导入 (池: ${poolN})`}
+                </Button>
+                <p className="text-xs text-muted-foreground">每个分组按自己的批次数量从池中取 key，组内线路按比例分配</p>
               </div>
 
               {globalLines.length === 0 ? (
@@ -297,11 +305,24 @@ export default function Page() {
                   if (!groups.has(g)) groups.set(g, []);
                   groups.get(g)!.push(l);
                 }
-                return Array.from(groups.entries()).map(([group, gLines]) => (
+                return Array.from(groups.entries()).map(([group, gLines]) => {
+                  const groupBatch = parseInt(gLines[0]?.config?.globalGroupBatch) || 10;
+                  const saveGroupBatch = (v: number) => {
+                    for (const l of gLines) {
+                      fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...l.config, globalGroupBatch: String(v) } }) });
+                    }
+                    fLines();
+                  };
+                  return (
                   <div key={group} className="border rounded-md overflow-hidden">
                     <div className="bg-muted/30 px-3 py-2 text-xs font-medium flex items-center gap-2 border-b">
                       <span>{group}</span>
                       <Badge variant="secondary" className="text-[10px] px-1 py-0">{gLines.length}</Badge>
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        <span className="text-muted-foreground">每批</span>
+                        <Input type="number" min={1} className="w-16 h-6 text-xs" value={groupBatch}
+                          onChange={e => saveGroupBatch(parseInt(e.target.value) || 1)} />
+                      </div>
                     </div>
                     <Table>
                       <TableHeader>
@@ -316,7 +337,7 @@ export default function Page() {
                         {gLines.map(l => {
                           const lCfg = l.config || {};
                           const ratio = parseInt(lCfg.globalRatio) || 100;
-                          const n = Math.round(gdBatch * ratio / 100);
+                          const n = Math.round(groupBatch * ratio / 100);
                           const result = gdResults.find(r => r.lineId === l.id);
                           return (
                             <TableRow key={l.id}>
@@ -353,7 +374,8 @@ export default function Page() {
                       </TableBody>
                     </Table>
                   </div>
-                ));
+                  );
+                });
               })()}
 
               <p className="text-xs text-muted-foreground">
@@ -461,7 +483,7 @@ export default function Page() {
                   <Input className="w-28 h-7 text-xs" value={cfg.globalGroup || "默认"} onChange={e => upd("globalGroup", e.target.value)} placeholder="默认" />
                   <span className="text-xs text-blue-600 ml-2">比例</span>
                   <Input type="number" min={0} max={100} className="w-20 h-7 text-xs" value={cfg.globalRatio || "100"} onChange={e => upd("globalRatio", e.target.value)} />
-                  <span className="text-xs text-muted-foreground">%  · 每批 {gdBatch} 个中取 {Math.round(gdBatch * (parseInt(cfg.globalRatio) || 100) / 100)} 个</span>
+                  <span className="text-xs text-muted-foreground">%  · 分组每批 {parseInt(cfg.globalGroupBatch) || 10} 个中取 {Math.round((parseInt(cfg.globalGroupBatch) || 10) * (parseInt(cfg.globalRatio) || 100) / 100)} 个</span>
                 </div>
               )}
               <div><Label className="text-xs">模型</Label>

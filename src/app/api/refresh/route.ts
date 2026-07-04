@@ -92,33 +92,47 @@ async function autoImportIndependent(line: any, batchSize: number) {
   }
 }
 
-// Global auto-import: imports to all global-mode lines with their ratios
-async function autoImportGlobal(batchSize: number) {
-  const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(batchSize).all();
-  if (!poolKeys.length) return;
-  const useKeys = poolKeys.map(k => k.key);
-  for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
-
+// Global auto-import: per group, take groupBatchSize keys and distribute by ratio
+async function autoImportGlobal() {
   const globalLines = db.select().from(lines).all().filter(l => {
     const c = JSON.parse(l.config);
     return c.importMode === "global";
   });
 
-  let anySuccess = false;
+  // Group lines
+  const groups = new Map<string, any[]>();
   for (const line of globalLines) {
-    const cfg = JSON.parse(line.config) as Record<string, string>;
-    const ratio = parseInt(cfg.globalRatio) || 100;
-    if (ratio <= 0) continue;
-    const n = Math.round(useKeys.length * ratio / 100);
-    const lineKeys = ratio >= 100 ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
-
-    addLog(line.id, `[自动上弹-全局] 导入 ${lineKeys.length} 个密钥 (${ratio}%)`, "info");
-    if (await importToLine(line, cfg, lineKeys)) anySuccess = true;
+    const cfg = JSON.parse(line.config);
+    const g = cfg.globalGroup || "默认";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g)!.push(line);
   }
 
-  if (!anySuccess) {
-    for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
-    for (const line of globalLines) addLog(line.id, `[自动上弹-全局] 所有线路均失败，密钥已退回池中`, "warn");
+  for (const [group, gLines] of groups) {
+    const firstCfg = JSON.parse(gLines[0].config);
+    const groupBatch = parseInt(firstCfg.globalGroupBatch) || 10;
+
+    const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(groupBatch).all();
+    if (!poolKeys.length) continue;
+    const useKeys = poolKeys.map(k => k.key);
+    for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
+
+    let anySuccess = false;
+    for (const line of gLines) {
+      const cfg = JSON.parse(line.config) as Record<string, string>;
+      const ratio = parseInt(cfg.globalRatio) || 100;
+      if (ratio <= 0) continue;
+      const n = Math.round(useKeys.length * ratio / 100);
+      const lineKeys = ratio >= 100 ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
+
+      addLog(line.id, `[自动上弹-全局/${group}] 导入 ${lineKeys.length} 个密钥 (${ratio}%)`, "info");
+      if (await importToLine(line, cfg, lineKeys)) anySuccess = true;
+    }
+
+    if (!anySuccess) {
+      for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+      for (const line of gLines) addLog(line.id, `[自动上弹-全局/${group}] 所有线路均失败，密钥已退回池中`, "warn");
+    }
   }
 }
 
@@ -128,9 +142,7 @@ export async function POST() {
   let updated = 0;
   let cooldown = false;
 
-  // Track which modes need auto-import
   let needGlobalImport = false;
-  let globalBatchSize = 0;
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config);
@@ -162,7 +174,6 @@ export async function POST() {
 
         if (isGlobal) {
           needGlobalImport = true;
-          globalBatchSize = Math.max(globalBatchSize, line.autoBatchSize || 10);
         } else {
           await autoImportIndependent(line, line.autoBatchSize || 10);
           cooldown = true;
@@ -172,7 +183,7 @@ export async function POST() {
   }
 
   if (needGlobalImport) {
-    await autoImportGlobal(globalBatchSize || 10);
+    await autoImportGlobal();
     cooldown = true;
   }
 
