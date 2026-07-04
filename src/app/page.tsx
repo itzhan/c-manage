@@ -290,57 +290,71 @@ export default function Page() {
 
               {globalLines.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-4 text-center">暂无全局模式的线路，请在线路配置中将投递方式设为「全局」</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>线路</TableHead>
-                      <TableHead className="w-[100px]">比例</TableHead>
-                      <TableHead className="w-[80px]">数量</TableHead>
-                      <TableHead className="w-[80px]">状态</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {globalLines.map(l => {
-                      const lCfg = l.config || {};
-                      const ratio = parseInt(lCfg.globalRatio) || 100;
-                      const n = Math.round(gdBatch * ratio / 100);
-                      const result = gdResults.find(r => r.lineId === l.id);
-                      return (
-                        <TableRow key={l.id}>
-                          <TableCell>
-                            <div>
-                              <span className="font-medium text-sm">{l.label}</span>
-                              {lCfg.channelName && <span className="text-xs text-muted-foreground ml-2">{lCfg.channelName}</span>}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1.5">
-                              <Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio}
-                                onChange={e => {
-                                  const v = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(v) } }) });
-                                  fLines();
-                                }} />
-                              <span className="text-xs text-muted-foreground">%</span>
-                            </div>
-                          </TableCell>
-                          <TableCell><span className="tabular-nums text-sm font-mono">{n}</span></TableCell>
-                          <TableCell>
-                            {result ? (
-                              <span className={`text-xs ${result.success ? "text-green-500" : "text-red-500"}`}>
-                                {result.success ? `✓ ${result.keyCount}个` : result.error}
-                              </span>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">{ratio === 0 ? "跳过" : "待导入"}</span>
-                            )}
-                          </TableCell>
+              ) : (() => {
+                const groups = new Map<string, Line[]>();
+                for (const l of globalLines) {
+                  const g = l.config?.globalGroup || "默认";
+                  if (!groups.has(g)) groups.set(g, []);
+                  groups.get(g)!.push(l);
+                }
+                return Array.from(groups.entries()).map(([group, gLines]) => (
+                  <div key={group} className="border rounded-md overflow-hidden">
+                    <div className="bg-muted/30 px-3 py-2 text-xs font-medium flex items-center gap-2 border-b">
+                      <span>{group}</span>
+                      <Badge variant="secondary" className="text-[10px] px-1 py-0">{gLines.length}</Badge>
+                    </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>线路</TableHead>
+                          <TableHead className="w-[100px]">比例</TableHead>
+                          <TableHead className="w-[80px]">数量</TableHead>
+                          <TableHead className="w-[80px]">状态</TableHead>
                         </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              )}
+                      </TableHeader>
+                      <TableBody>
+                        {gLines.map(l => {
+                          const lCfg = l.config || {};
+                          const ratio = parseInt(lCfg.globalRatio) || 100;
+                          const n = Math.round(gdBatch * ratio / 100);
+                          const result = gdResults.find(r => r.lineId === l.id);
+                          return (
+                            <TableRow key={l.id}>
+                              <TableCell>
+                                <div>
+                                  <span className="font-medium text-sm">{l.label}</span>
+                                  {lCfg.channelName && <span className="text-xs text-muted-foreground ml-2">{lCfg.channelName}</span>}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-1.5">
+                                  <Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio}
+                                    onChange={e => {
+                                      const v = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                                      fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(v) } }) });
+                                      fLines();
+                                    }} />
+                                  <span className="text-xs text-muted-foreground">%</span>
+                                </div>
+                              </TableCell>
+                              <TableCell><span className="tabular-nums text-sm font-mono">{n}</span></TableCell>
+                              <TableCell>
+                                {result ? (
+                                  <span className={`text-xs ${result.success ? "text-green-500" : "text-red-500"}`}>
+                                    {result.success ? `✓ ${result.keyCount}个` : result.error}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">{ratio === 0 ? "跳过" : "待导入"}</span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ));
+              })()}
 
               <p className="text-xs text-muted-foreground">
                 比例 100% = 全部 key · 0% = 跳过 · 小于 100% 随机选取并四舍五入
@@ -442,8 +456,10 @@ export default function Page() {
                 </div>
               </div>
               {!isIndependent && (
-                <div className="flex items-center gap-3 rounded-md bg-blue-500/5 border border-blue-500/20 px-3 py-2">
-                  <span className="text-xs text-blue-600">全局比例</span>
+                <div className="flex items-center gap-3 rounded-md bg-blue-500/5 border border-blue-500/20 px-3 py-2 flex-wrap">
+                  <span className="text-xs text-blue-600">分组</span>
+                  <Input className="w-28 h-7 text-xs" value={cfg.globalGroup || "默认"} onChange={e => upd("globalGroup", e.target.value)} placeholder="默认" />
+                  <span className="text-xs text-blue-600 ml-2">比例</span>
                   <Input type="number" min={0} max={100} className="w-20 h-7 text-xs" value={cfg.globalRatio || "100"} onChange={e => upd("globalRatio", e.target.value)} />
                   <span className="text-xs text-muted-foreground">%  · 每批 {gdBatch} 个中取 {Math.round(gdBatch * (parseInt(cfg.globalRatio) || 100) / 100)} 个</span>
                 </div>
