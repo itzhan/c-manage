@@ -17,8 +17,8 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as { count: number; lineRatios?: Record<string, number> };
-  const { count, lineRatios } = body;
+  const body = (await req.json()) as { count: number; mode?: string; lineRatios?: Record<string, number> };
+  const { count, mode, lineRatios } = body;
   if (!count || count <= 0) {
     return Response.json({ success: false, error: "count must be > 0" }, { status: 400 });
   }
@@ -29,8 +29,6 @@ export async function POST(req: Request) {
   }
 
   const useKeys = poolKeys.map(k => k.key);
-
-  // 先从池中取出
   for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
 
   const allLines = db.select().from(lines).all();
@@ -39,15 +37,27 @@ export async function POST(req: Request) {
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config) as Record<string, string>;
+    const lineMode = cfg.importMode || "independent";
+
+    // Determine if this line should participate
+    if (mode === "global") {
+      // Global dispatch: only global-mode lines
+      if (lineMode !== "global") continue;
+    } else if (mode === "independent") {
+      // Single-line import (called from line detail)
+      if (line.id !== parseInt(String(lineRatios?.targetLineId || "0"))) continue;
+    } else {
+      // Legacy: respect importDisabled
+      if (cfg.importDisabled === "1") {
+        results.push({ lineId: line.id, label: line.label, success: false, error: "已禁用", keyCount: 0 });
+        continue;
+      }
+    }
 
     // Check ratio from request params, then fall back to config
     const ratio = lineRatios?.[String(line.id)];
     if (ratio === 0) {
       results.push({ lineId: line.id, label: line.label, success: false, error: "已跳过", keyCount: 0 });
-      continue;
-    }
-    if (ratio === undefined && cfg.importDisabled === "1") {
-      results.push({ lineId: line.id, label: line.label, success: false, error: "已禁用", keyCount: 0 });
       continue;
     }
 
@@ -56,7 +66,7 @@ export async function POST(req: Request) {
 
     if (!baseUrl || !cfg.authValue || !name) {
       results.push({ lineId: line.id, label: line.label, success: false, error: "配置不完整", keyCount: 0 });
-      addLog(line.id, `[全线导入] 跳过: 配置不完整`, "warn");
+      addLog(line.id, `[导入] 跳过: 配置不完整`, "warn");
       continue;
     }
 
@@ -64,10 +74,15 @@ export async function POST(req: Request) {
     let lineKeys: string[];
     if (ratio !== undefined && ratio < 100) {
       const n = Math.round(useKeys.length * ratio / 100);
-      lineKeys = n >= useKeys.length ? useKeys : shuffle(useKeys).slice(0, n);
+      lineKeys = n >= useKeys.length ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
     } else {
-      const lineBatchSize = parseInt(cfg.importBatchSize) || 0;
-      lineKeys = lineBatchSize > 0 ? useKeys.slice(0, lineBatchSize) : useKeys;
+      const globalRatio = parseInt(cfg.globalRatio) || 100;
+      if (mode === "global" && globalRatio < 100) {
+        const n = Math.round(useKeys.length * globalRatio / 100);
+        lineKeys = shuffle(useKeys).slice(0, Math.max(1, n));
+      } else {
+        lineKeys = useKeys;
+      }
     }
 
     if (lineKeys.length === 0) {
@@ -76,8 +91,7 @@ export async function POST(req: Request) {
     }
 
     const lineKeyStr = "\n" + lineKeys.join("\n");
-
-    addLog(line.id, `[全线导入] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
+    addLog(line.id, `[导入] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
 
     const cookie = getCookie(cfg);
     const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
@@ -95,35 +109,29 @@ export async function POST(req: Request) {
       const data = await resp.json();
 
       if (resp.ok && data.success !== false) {
-        addLog(line.id, `[全线导入] 成功！`, "ok");
+        addLog(line.id, `[导入] 成功！`, "ok");
         db.insert(records).values({ lineId: line.id, name, keyCount: lineKeys.length }).run();
-        if (cfg.fixedName === "1") {
-          addLog(line.id, `[全线导入] 渠道名称固定，不递增`, "info");
-        } else {
+        if (cfg.fixedName !== "1") {
           const nextName = incrementName(name);
           cfg.channelName = nextName;
           db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-          addLog(line.id, `[全线导入] 名称递增 → ${nextName}`, "info");
+          addLog(line.id, `[导入] 名称递增 → ${nextName}`, "info");
         }
         results.push({ lineId: line.id, label: line.label, success: true, name, keyCount: lineKeys.length });
         anySuccess = true;
       } else {
-        addLog(line.id, `[全线导入] 失败: ${data.message || ""}`, "err");
+        addLog(line.id, `[导入] 失败: ${data.message || ""}`, "err");
         results.push({ lineId: line.id, label: line.label, success: false, error: data.message || "远端返回失败", keyCount: lineKeys.length });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      addLog(line.id, `[全线导入] 请求失败: ${msg}`, "err");
+      addLog(line.id, `[导入] 请求失败: ${msg}`, "err");
       results.push({ lineId: line.id, label: line.label, success: false, error: msg, keyCount: lineKeys.length });
     }
   }
 
-  // 如果全部失败，把 key 退回池
   if (!anySuccess) {
     for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
-    for (const line of allLines) {
-      addLog(line.id, `[全线导入] 所有线路均失败，密钥已退回池中`, "warn");
-    }
   }
 
   const remaining = db.select().from(keys).all().length;

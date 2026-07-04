@@ -53,11 +53,11 @@ export default function Page() {
   // Global dispatch tab
   const [showGlobal, setShowGlobal] = useState(false);
   const [gdBatch, setGdBatch] = useState(10);
-  const [gdRatios, setGdRatios] = useState<Record<string, number>>({});
   const [gdBusy, setGdBusy] = useState(false);
   const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; name?: string; error?: string; keyCount?: number }>>([]);
+  const [gdAutoOn, setGdAutoOn] = useState(false);
+  const [gdAutoBatch, setGdAutoBatch] = useState(10);
 
-  // Use refs for timer callback to avoid re-creating interval on every state change
   const lidRef = useRef(lid);
   const pgRef = useRef(pg);
   const pausedRef = useRef(paused);
@@ -76,10 +76,8 @@ export default function Page() {
     await fRecs(id, 1); setPg(1); await fLogs(id);
   }, [fRecs, fLogs]);
 
-  // Initial load
-  useEffect(() => { (async () => { await fPool(); const ls = await fLines(); if (ls.length) { setLid(ls[0].id); await loadLine(ls[0].id, ls); } })(); }, []);
+  useEffect(() => { (async () => { await fPool(); const ls = await fLines(); if (ls.length) { setShowGlobal(true); } })(); }, []);
 
-  // Stable refresh function using refs — does NOT change identity on state updates
   const cooldownRef = useRef(false);
   const doRefresh = useCallback(async () => {
     if (cooldownRef.current) return;
@@ -101,7 +99,6 @@ export default function Page() {
     }
   }, [fLines, fPool, fRecs, fLogs]);
 
-  // Single stable interval — only recreated when paused changes
   useEffect(() => {
     if (paused) return;
     const t = setInterval(doRefresh, 10000);
@@ -114,7 +111,7 @@ export default function Page() {
   const addKeys = async () => { const k = newKeys.split("\n").map(s => s.trim()).filter(Boolean); if (!k.length) return; await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: k }) }); setNewKeys(""); fPool(); };
   const clearPool = async () => { if (!confirm("确认清空密钥池？")) return; await fetch("/api/keys", { method: "DELETE" }); fPool(); };
 
-  const addLine = async () => { const label = prompt("线路名称:", `线路${lines.length + 1}`); if (!label?.trim()) return; const r = await fetch("/api/lines", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: label.trim() }) }).then(r => r.json()); if (r.success) { const ls = await fLines(); setLid(r.data.id); loadLine(r.data.id, ls); } };
+  const addLine = async () => { const label = prompt("线路名称:", `线路${lines.length + 1}`); if (!label?.trim()) return; const r = await fetch("/api/lines", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: label.trim() }) }).then(r => r.json()); if (r.success) { const ls = await fLines(); setShowGlobal(false); setLid(r.data.id); loadLine(r.data.id, ls); } };
   const renLine = async (id: number, old: string) => { const l = prompt("线路名称:", old); if (!l?.trim()) return; await fetch(`/api/lines/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: l.trim() }) }); fLines(); };
   const delLine = async (id: number) => { if (!confirm("确认删除？")) return; await fetch(`/api/lines/${id}`, { method: "DELETE" }); if (lid === id) setLid(null); const ls = await fLines(); if (ls.length && lid === id) { setLid(ls[0].id); loadLine(ls[0].id, ls); } };
   const delRec = async (rid: number) => { if (!lid) return; await fetch(`/api/lines/${lid}/records?recordId=${rid}`, { method: "DELETE" }); fRecs(lid, pg); fLines(); };
@@ -122,14 +119,16 @@ export default function Page() {
 
   const [impResults, setImpResults] = useState<Array<{ label: string; success: boolean; name?: string; error?: string }>>([]);
 
-  const doImport = async () => {
+  // Single-line import (for independent lines)
+  const doLineImport = async () => {
+    if (!lid) return;
     setImpBusy(true); setImpResults([]);
-    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: impCount }) }).then(r => r.json());
+    const r = await fetch(`/api/lines/${lid}/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: impCount }) }).then(r => r.json());
     setImpBusy(false);
-    if (r.success) setImpResults(r.data.results);
+    if (r.success) setImpResults([{ label: lines.find(l => l.id === lid)?.label || "", success: true, name: r.data?.name }]);
+    else setImpResults([{ label: lines.find(l => l.id === lid)?.label || "", success: false, error: r.error }]);
     fPool(); fLines();
     if (lid) { fRecs(lid, pg); fLogs(lid); }
-    // 刷新当前线路的 config（名称可能已递增）
     if (r.success) {
       const ls = await fLines();
       const l = ls.find((x: Line) => x.id === lid);
@@ -137,19 +136,47 @@ export default function Page() {
     }
   };
 
+  // Global import
   const doGlobalImport = async () => {
     setGdBusy(true); setGdResults([]);
-    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: gdBatch, lineRatios: gdRatios }) }).then(r => r.json());
+    const globalLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
+    const lineRatios: Record<string, number> = {};
+    for (const l of globalLines) {
+      lineRatios[String(l.id)] = parseInt(l.config?.globalRatio) || 100;
+    }
+    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: gdBatch, mode: "global", lineRatios }) }).then(r => r.json());
     setGdBusy(false);
     if (r.success) setGdResults(r.data.results);
     fPool(); fLines();
   };
 
   const saveAuto = async (on: boolean, bs: number) => { setAutoOn(on); setAutoBatch(bs); if (lid) fetch(`/api/lines/${lid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: on, autoBatchSize: bs }) }); };
+
+  // Save global auto settings to all global lines
+  const saveGlobalAuto = async (on: boolean, bs: number) => {
+    setGdAutoOn(on); setGdAutoBatch(bs);
+    const globalLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
+    for (const l of globalLines) {
+      await fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: on, autoBatchSize: bs }) });
+    }
+    fLines();
+  };
+
+  // Sync gdAutoOn from lines
+  useEffect(() => {
+    const globalLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
+    if (globalLines.length > 0) {
+      setGdAutoOn(globalLines.some(l => l.autoEnabled));
+      setGdAutoBatch(globalLines[0]?.autoBatchSize || 10);
+    }
+  }, [lines]);
+
   const clrLogs = async () => { if (!lid) return; await fetch(`/api/lines/${lid}/logs`, { method: "DELETE" }); setLogs([]); };
 
   const totalPg = Math.ceil(recTotal / 10);
   const pendingKeyCount = countLines(newKeys);
+  const globalLines = lines.filter(l => (l.config?.importMode || "independent") === "global");
+  const isIndependent = (cfg.importMode || "independent") === "independent";
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -166,10 +193,11 @@ export default function Page() {
           <button
             className={`w-full text-left px-4 py-2 text-sm transition-colors ${showGlobal ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
             onClick={() => { setShowGlobal(true); setLid(null); }}
-          >全局调度</button>
+          >全局调度 <Badge variant="secondary" className="text-[10px] px-1 py-0 ml-1">{globalLines.length}</Badge></button>
           <div className="px-4 py-1.5"><span className="text-[10px] text-muted-foreground uppercase tracking-wider">线路</span></div>
           {lines.map(l => {
             const lCfg = l.config || {};
+            const mode = lCfg.importMode || "independent";
             return (
               <button key={l.id}
                 className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between ${!showGlobal && l.id === lid ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
@@ -177,7 +205,7 @@ export default function Page() {
               >
                 <span className="truncate">{l.label}</span>
                 <span className="flex items-center gap-1 flex-shrink-0">
-                  {lCfg.importDisabled === "1" && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" title="已禁用" />}
+                  <span className={`text-[9px] px-1 rounded ${mode === "global" ? "bg-blue-500/20 text-blue-600" : "bg-muted text-muted-foreground"}`}>{mode === "global" ? "全局" : "单独"}</span>
                   {l.activeCount > 0 && <Badge variant="secondary" className="text-[10px] px-1 py-0">{l.activeCount}</Badge>}
                 </span>
               </button>
@@ -230,74 +258,92 @@ export default function Page() {
         </CardContent>
       </Card>
 
-
       {/* Global Dispatch Panel */}
       {showGlobal && (
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">全局调度</CardTitle></CardHeader>
             <CardContent className="space-y-4">
+              {/* Auto reload for global */}
+              <div className="flex items-center gap-3 border-b border-border pb-3">
+                <Switch checked={gdAutoOn} onCheckedChange={v => saveGlobalAuto(v, gdAutoBatch)} />
+                <span className="text-sm text-muted-foreground">全局自动上弹</span>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Label className="text-xs">每批</Label>
+                  <Input type="number" className="w-[80px] h-7 text-xs" value={gdAutoBatch} onChange={e => saveGlobalAuto(gdAutoOn, parseInt(e.target.value) || 10)} />
+                </div>
+                <span className={`text-xs ${gdAutoOn && poolN > 0 ? "text-green-500" : "text-muted-foreground"}`}>{!gdAutoOn ? "未启用" : poolN === 0 ? "池空" : "运行中"}</span>
+              </div>
+
+              {/* Manual import */}
               <div className="flex items-center gap-3">
                 <div className="w-[140px]">
-                  <Label className="text-xs">每批数量</Label>
+                  <Label className="text-xs">手动导入数量</Label>
                   <Input type="number" min={1} value={gdBatch} onChange={e => setGdBatch(parseInt(e.target.value) || 1)} />
                 </div>
                 <div className="mt-5">
-                  <Button onClick={doGlobalImport} disabled={gdBusy || poolN === 0}>
+                  <Button onClick={doGlobalImport} disabled={gdBusy || poolN === 0 || globalLines.length === 0}>
                     {gdBusy ? "导入中..." : `全局导入 (池: ${poolN})`}
                   </Button>
                 </div>
               </div>
 
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>线路</TableHead>
-                    <TableHead className="w-[100px]">比例</TableHead>
-                    <TableHead className="w-[80px]">数量</TableHead>
-                    <TableHead className="w-[80px]">状态</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {lines.map(l => {
-                    const lCfg = l.config || {};
-                    const ratio = gdRatios[String(l.id)] ?? (lCfg.importDisabled === "1" ? 0 : 100);
-                    const n = Math.round(gdBatch * ratio / 100);
-                    const result = gdResults.find(r => r.lineId === l.id);
-                    return (
-                      <TableRow key={l.id}>
-                        <TableCell>
-                          <div>
-                            <span className="font-medium text-sm">{l.label}</span>
-                            {lCfg.channelName && <span className="text-xs text-muted-foreground ml-2">{lCfg.channelName}</span>}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio}
-                              onChange={e => setGdRatios(r => ({ ...r, [String(l.id)]: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)) }))} />
-                            <span className="text-xs text-muted-foreground">%</span>
-                          </div>
-                        </TableCell>
-                        <TableCell><span className="tabular-nums text-sm font-mono">{n}</span></TableCell>
-                        <TableCell>
-                          {result ? (
-                            <span className={`text-xs ${result.success ? "text-green-500" : "text-red-500"}`}>
-                              {result.success ? `✓ ${result.keyCount}个` : result.error}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">{ratio === 0 ? "跳过" : "待导入"}</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              {globalLines.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">暂无全局模式的线路，请在线路配置中将投递方式设为「全局」</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>线路</TableHead>
+                      <TableHead className="w-[100px]">比例</TableHead>
+                      <TableHead className="w-[80px]">数量</TableHead>
+                      <TableHead className="w-[80px]">状态</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {globalLines.map(l => {
+                      const lCfg = l.config || {};
+                      const ratio = parseInt(lCfg.globalRatio) || 100;
+                      const n = Math.round(gdBatch * ratio / 100);
+                      const result = gdResults.find(r => r.lineId === l.id);
+                      return (
+                        <TableRow key={l.id}>
+                          <TableCell>
+                            <div>
+                              <span className="font-medium text-sm">{l.label}</span>
+                              {lCfg.channelName && <span className="text-xs text-muted-foreground ml-2">{lCfg.channelName}</span>}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1.5">
+                              <Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio}
+                                onChange={e => {
+                                  const v = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
+                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(v) } }) });
+                                  fLines();
+                                }} />
+                              <span className="text-xs text-muted-foreground">%</span>
+                            </div>
+                          </TableCell>
+                          <TableCell><span className="tabular-nums text-sm font-mono">{n}</span></TableCell>
+                          <TableCell>
+                            {result ? (
+                              <span className={`text-xs ${result.success ? "text-green-500" : "text-red-500"}`}>
+                                {result.success ? `✓ ${result.keyCount}个` : result.error}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">{ratio === 0 ? "跳过" : "待导入"}</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
 
               <p className="text-xs text-muted-foreground">
                 比例 100% = 全部 key · 0% = 跳过 · 小于 100% 随机选取并四舍五入
-                {poolN === 0 ? " · 密钥池为空" : gdBatch > poolN ? ` · 池中仅 ${poolN} 个，将全部取用` : ""}
               </p>
             </CardContent>
           </Card>
@@ -314,6 +360,7 @@ export default function Page() {
               {lines.length > 1 && <Button size="sm" variant="ghost" className="text-xs h-7 text-destructive" onClick={() => delLine(lid)}>删除</Button>}
             </div>
           </div>
+
           {/* Monitor */}
           <Card>
             <CardHeader className="pb-3">
@@ -381,20 +428,26 @@ export default function Page() {
                       ? <p className="text-xs text-muted-foreground">名称固定，不递增</p>
                       : cfg.channelName && <p className="text-xs text-primary">下次 → {incName(cfg.channelName)}</p>}
                     <label className="flex items-center gap-1 ml-auto cursor-pointer">
-                      <input type="checkbox" checked={cfg.importDisabled === "1"} onChange={e => upd("importDisabled", e.target.checked ? "1" : "0")} className="w-3.5 h-3.5 rounded" />
-                      <span className="text-xs text-muted-foreground">禁用导入</span>
-                    </label>
-                    <label className="flex items-center gap-1 cursor-pointer">
                       <input type="checkbox" checked={cfg.fixedName === "1"} onChange={e => upd("fixedName", e.target.checked ? "1" : "0")} className="w-3.5 h-3.5 rounded" />
                       <span className="text-xs text-muted-foreground">固定名称</span>
                     </label>
                   </div>
                 </div>
-                <div className="w-[100px]"><Label className="text-xs">每批数量</Label><Input type="number" min={0} value={cfg.importBatchSize || ""} onChange={e => upd("importBatchSize", e.target.value)} placeholder="0=全部" /><p className="text-xs text-muted-foreground mt-0.5">{parseInt(cfg.importBatchSize) > 0 ? `取前${cfg.importBatchSize}个` : "全部"}</p></div>
+                <div className="w-[140px]"><Label className="text-xs">投递方式</Label>
+                  <Select value={cfg.importMode || "independent"} onValueChange={v => v && upd("importMode", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="independent">单独</SelectItem><SelectItem value="global">全局</SelectItem></SelectContent></Select>
+                  {!isIndependent && <p className="text-xs text-blue-500 mt-1">由全局调度管理</p>}
+                </div>
                 <div className="w-[160px]"><Label className="text-xs">渠道类型</Label>
                   <Select value={cfg.channelType || "14"} onValueChange={v => v && upd("channelType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">OpenAI</SelectItem><SelectItem value="14">Anthropic</SelectItem><SelectItem value="3">Azure</SelectItem><SelectItem value="24">其他</SelectItem></SelectContent></Select>
                 </div>
               </div>
+              {!isIndependent && (
+                <div className="flex items-center gap-3 rounded-md bg-blue-500/5 border border-blue-500/20 px-3 py-2">
+                  <span className="text-xs text-blue-600">全局比例</span>
+                  <Input type="number" min={0} max={100} className="w-20 h-7 text-xs" value={cfg.globalRatio || "100"} onChange={e => upd("globalRatio", e.target.value)} />
+                  <span className="text-xs text-muted-foreground">%  · 每批 {gdBatch} 个中取 {Math.round(gdBatch * (parseInt(cfg.globalRatio) || 100) / 100)} 个</span>
+                </div>
+              )}
               <div><Label className="text-xs">模型</Label>
                 <div className="flex gap-1.5 flex-wrap mb-2">{PRESETS.map(([l, v]) => <Button key={l} size="sm" variant={cfg.models === v ? "default" : "outline"} className="h-6 text-xs px-2" onClick={() => upd("models", v)}>{l}</Button>)}</div>
                 <Input value={cfg.models || ""} onChange={e => upd("models", e.target.value)} className="font-mono text-xs" />
@@ -427,40 +480,40 @@ export default function Page() {
             </CardContent>
           </Card>
 
-          {/* Auto Reload */}
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">自动上弹</CardTitle></CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-3">
-                <Switch checked={autoOn} onCheckedChange={v => saveAuto(v, autoBatch)} />
-                <span className="text-sm text-muted-foreground">批次全禁用时自动导入下一批</span>
-                <span className={`text-xs ml-auto ${autoOn && poolN > 0 ? "text-green-500" : "text-muted-foreground"}`}>{!autoOn ? "未启用" : poolN === 0 ? "池空" : `池${poolN} · 每批${autoBatch}`}</span>
-              </div>
-              <div className="flex items-center gap-3 mt-3"><Label className="text-xs w-20">每批数量</Label><Input type="number" className="w-[120px]" value={autoBatch} onChange={e => saveAuto(autoOn, parseInt(e.target.value) || 10)} /></div>
-            </CardContent>
-          </Card>
-
-          {/* Import All Lines */}
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">全线导入</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">从密钥池取出一批 key，同时导入到所有线路的远端 API</p>
-              <div className="flex items-center gap-3">
-                <div className="w-[120px]"><Label className="text-xs">每批数量</Label><Input type="number" value={impCount} onChange={e => setImpCount(parseInt(e.target.value) || 0)} /></div>
-                <Button onClick={doImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "全线导入中..." : `全线导入 (${lines.filter(l => l.config?.importDisabled !== "1").length}/${lines.length} 条线路)`}</Button>
-              </div>
-              <p className="text-xs text-muted-foreground">{poolN === 0 ? "密钥池为空" : impCount > poolN ? `池中仅${poolN}个，将全部取用` : `取前${impCount}个，剩余${poolN - impCount}个`}</p>
-              {impResults.length > 0 && (
-                <div className="space-y-1 pt-1">
-                  {impResults.map((r, i) => (
-                    <div key={i} className={`text-xs ${r.success ? "text-green-500" : "text-red-500"}`}>
-                      {r.label}: {r.success ? `成功 → ${r.name}` : `失败 — ${r.error}`}
-                    </div>
-                  ))}
+          {/* Independent: Auto Reload + Import */}
+          {isIndependent && (<>
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">自动上弹</CardTitle></CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-3">
+                  <Switch checked={autoOn} onCheckedChange={v => saveAuto(v, autoBatch)} />
+                  <span className="text-sm text-muted-foreground">批次全禁用时自动导入下一批</span>
+                  <span className={`text-xs ml-auto ${autoOn && poolN > 0 ? "text-green-500" : "text-muted-foreground"}`}>{!autoOn ? "未启用" : poolN === 0 ? "池空" : `池${poolN} · 每批${autoBatch}`}</span>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+                <div className="flex items-center gap-3 mt-3"><Label className="text-xs w-20">每批数量</Label><Input type="number" className="w-[120px]" value={autoBatch} onChange={e => saveAuto(autoOn, parseInt(e.target.value) || 10)} /></div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3"><CardTitle className="text-sm">手动导入</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-[120px]"><Label className="text-xs">数量</Label><Input type="number" value={impCount} onChange={e => setImpCount(parseInt(e.target.value) || 0)} /></div>
+                  <Button onClick={doLineImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "导入中..." : "导入"}</Button>
+                </div>
+                <p className="text-xs text-muted-foreground">{poolN === 0 ? "密钥池为空" : impCount > poolN ? `池中仅${poolN}个，将全部取用` : `取前${impCount}个，剩余${poolN - impCount}个`}</p>
+                {impResults.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    {impResults.map((r, i) => (
+                      <div key={i} className={`text-xs ${r.success ? "text-green-500" : "text-red-500"}`}>
+                        {r.label}: {r.success ? `成功 → ${r.name}` : `失败 — ${r.error}`}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>)}
 
           {/* Logs */}
           <Card>

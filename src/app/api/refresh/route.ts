@@ -9,6 +9,15 @@ function addLog(lineId: number, message: string, level = "info") {
   db.insert(logs).values({ lineId, message, level }).run();
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 async function fetchChannels(cfg: Record<string, string>, name: string) {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
   const authValue = cfg.authValue || "";
@@ -30,68 +39,86 @@ async function fetchChannels(cfg: Record<string, string>, name: string) {
   return null;
 }
 
-async function autoImportAllLines(batchSize: number) {
+async function importToLine(line: any, cfg: Record<string, string>, useKeys: string[]) {
+  const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+  const name = cfg.channelName || "";
+  if (!baseUrl || !cfg.authValue || !name) return false;
+
+  const lineKeyStr = "\n" + useKeys.join("\n");
+  const cookie = getCookie(cfg);
+  const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
+  const endpoint = getImportEndpoint(cfg);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json", "Accept": "application/json",
+    "New-API-User": cfg.newApiUser || "3", "Cache-Control": "no-store",
+  };
+  if (cookie) headers["Cookie"] = cookie;
+
+  try {
+    const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+    const data = await resp.json();
+    if (resp.ok && data.success !== false) {
+      addLog(line.id, `[自动上弹] 成功！导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "ok");
+      db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
+      if (cfg.fixedName !== "1") {
+        const nextName = incrementName(name);
+        cfg.channelName = nextName;
+        db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
+        addLog(line.id, `[自动上弹] 名称递增 → ${nextName}`, "info");
+      }
+      return true;
+    } else {
+      addLog(line.id, `[自动上弹] 失败: ${data.message || ""}`, "err");
+    }
+  } catch (e: unknown) {
+    addLog(line.id, `[自动上弹] 请求失败: ${e instanceof Error ? e.message : String(e)}`, "err");
+  }
+  return false;
+}
+
+// Independent line auto-import: only imports to this single line
+async function autoImportIndependent(line: any, batchSize: number) {
   const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(batchSize).all();
   if (!poolKeys.length) return;
-
   const useKeys = poolKeys.map(k => k.key);
-  const keyStr = "\n" + useKeys.join("\n");
   for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
 
-  const allLines = db.select().from(lines).all();
+  const cfg = JSON.parse(line.config) as Record<string, string>;
+  addLog(line.id, `[自动上弹-单独] 导入 ${useKeys.length} 个密钥`, "info");
+  const ok = await importToLine(line, cfg, useKeys);
+  if (!ok) {
+    for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+    addLog(line.id, `[自动上弹-单独] 失败，密钥已退回池中`, "warn");
+  }
+}
+
+// Global auto-import: imports to all global-mode lines with their ratios
+async function autoImportGlobal(batchSize: number) {
+  const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(batchSize).all();
+  if (!poolKeys.length) return;
+  const useKeys = poolKeys.map(k => k.key);
+  for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
+
+  const globalLines = db.select().from(lines).all().filter(l => {
+    const c = JSON.parse(l.config);
+    return c.importMode === "global";
+  });
+
   let anySuccess = false;
-
-  for (const line of allLines) {
+  for (const line of globalLines) {
     const cfg = JSON.parse(line.config) as Record<string, string>;
-    if (cfg.importDisabled === "1") continue;
-    const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
-    const name = cfg.channelName || "";
-    if (!baseUrl || !cfg.authValue || !name) {
-      addLog(line.id, `[自动全线] 跳过: 配置不完整`, "warn");
-      continue;
-    }
+    const ratio = parseInt(cfg.globalRatio) || 100;
+    if (ratio <= 0) continue;
+    const n = Math.round(useKeys.length * ratio / 100);
+    const lineKeys = ratio >= 100 ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
 
-    const lineBatchSize = parseInt(cfg.importBatchSize) || 0;
-    const lineKeys = lineBatchSize > 0 ? useKeys.slice(0, lineBatchSize) : useKeys;
-    const lineKeyStr = "\n" + lineKeys.join("\n");
-
-    addLog(line.id, `[自动全线] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
-
-    const cookie = getCookie(cfg);
-    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
-    const endpoint = getImportEndpoint(cfg);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json", "Accept": "application/json",
-      "New-API-User": cfg.newApiUser || "3", "Cache-Control": "no-store",
-    };
-    if (cookie) headers["Cookie"] = cookie;
-
-    try {
-      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-      const data = await resp.json();
-      if (resp.ok && data.success !== false) {
-        addLog(line.id, `[自动全线] 成功！`, "ok");
-        db.insert(records).values({ lineId: line.id, name, keyCount: lineKeys.length }).run();
-        if (cfg.fixedName === "1") {
-          addLog(line.id, `[自动全线] 渠道名称固定，不递增`, "info");
-        } else {
-          const nextName = incrementName(name);
-          cfg.channelName = nextName;
-          db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-          addLog(line.id, `[自动全线] 名称递增 → ${nextName}`, "info");
-        }
-        anySuccess = true;
-      } else {
-        addLog(line.id, `[自动全线] 失败: ${data.message || ""}`, "err");
-      }
-    } catch (e: unknown) {
-      addLog(line.id, `[自动全线] 请求失败: ${e instanceof Error ? e.message : String(e)}`, "err");
-    }
+    addLog(line.id, `[自动上弹-全局] 导入 ${lineKeys.length} 个密钥 (${ratio}%)`, "info");
+    if (await importToLine(line, cfg, lineKeys)) anySuccess = true;
   }
 
   if (!anySuccess) {
     for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
-    for (const line of allLines) addLog(line.id, `[自动全线] 所有线路均失败，密钥已退回池中`, "warn");
+    for (const line of globalLines) addLog(line.id, `[自动上弹-全局] 所有线路均失败，密钥已退回池中`, "warn");
   }
 }
 
@@ -100,11 +127,14 @@ export async function POST() {
   const now = Math.floor(Date.now() / 1000);
   let updated = 0;
   let cooldown = false;
-  let needAutoImport = false;
-  let autoImportBatchSize = 0;
+
+  // Track which modes need auto-import
+  let needGlobalImport = false;
+  let globalBatchSize = 0;
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config);
+    const isGlobal = cfg.importMode === "global";
     const recs = db.select().from(records).where(eq(records.lineId, line.id)).all();
 
     for (const r of recs) {
@@ -124,20 +154,25 @@ export async function POST() {
       updated++;
     }
 
-    // 检测是否需要自动上弹（任意一条线路开启了且最新批次全灭）
     if (line.autoEnabled) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
       const latest = unfrozen.length > 0 ? unfrozen[unfrozen.length - 1] : null;
       if (latest?.allDisabledSince) {
         db.update(records).set({ frozen: 1 }).where(eq(records.id, latest.id)).run();
-        needAutoImport = true;
-        autoImportBatchSize = Math.max(autoImportBatchSize, line.autoBatchSize || 10);
+
+        if (isGlobal) {
+          needGlobalImport = true;
+          globalBatchSize = Math.max(globalBatchSize, line.autoBatchSize || 10);
+        } else {
+          await autoImportIndependent(line, line.autoBatchSize || 10);
+          cooldown = true;
+        }
       }
     }
   }
 
-  if (needAutoImport) {
-    await autoImportAllLines(autoImportBatchSize || 10);
+  if (needGlobalImport) {
+    await autoImportGlobal(globalBatchSize || 10);
     cooldown = true;
   }
 
