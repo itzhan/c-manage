@@ -58,10 +58,14 @@ export async function POST(req: Request) {
       if (resp.ok && data.success !== false) {
         addLog(line.id, `[全线导入] 成功！`, "ok");
         db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
-        const nextName = incrementName(name);
-        cfg.channelName = nextName;
-        db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-        addLog(line.id, `[全线导入] 名称递增 → ${nextName}`, "info");
+        if (cfg.fixedName === "1") {
+          addLog(line.id, `[全线导入] 渠道名称固定，不递增`, "info");
+        } else {
+          const nextName = incrementName(name);
+          cfg.channelName = nextName;
+          db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
+          addLog(line.id, `[全线导入] 名称递增 → ${nextName}`, "info");
+        }
         results.push({ lineId: line.id, label: line.label, success: true, name });
         anySuccess = true;
       } else {

@@ -66,10 +66,14 @@ async function autoImportAllLines(batchSize: number) {
       if (resp.ok && data.success !== false) {
         addLog(line.id, `[自动全线] 成功！`, "ok");
         db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
-        const nextName = incrementName(name);
-        cfg.channelName = nextName;
-        db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-        addLog(line.id, `[自动全线] 名称递增 → ${nextName}`, "info");
+        if (cfg.fixedName === "1") {
+          addLog(line.id, `[自动全线] 渠道名称固定，不递增`, "info");
+        } else {
+          const nextName = incrementName(name);
+          cfg.channelName = nextName;
+          db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
+          addLog(line.id, `[自动全线] 名称递增 → ${nextName}`, "info");
+        }
         anySuccess = true;
       } else {
         addLog(line.id, `[自动全线] 失败: ${data.message || ""}`, "err");

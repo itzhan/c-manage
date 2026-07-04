@@ -53,10 +53,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (resp.ok && data.success !== false) {
       addLog(lineId, `导入成功！${data.message || ""}`, "ok");
       db.insert(records).values({ lineId, name, keyCount: useKeys.length }).run();
-      const nextName = incrementName(name);
-      cfg.channelName = nextName;
-      db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, lineId)).run();
-      addLog(lineId, `渠道名称已自动递增 → ${nextName}`, "info");
+      let nextName = name;
+      if (cfg.fixedName === "1") {
+        addLog(lineId, `渠道名称固定，不递增`, "info");
+      } else {
+        nextName = incrementName(name);
+        cfg.channelName = nextName;
+        db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, lineId)).run();
+        addLog(lineId, `渠道名称已自动递增 → ${nextName}`, "info");
+      }
 
       const remaining = db.select().from(keys).all().length;
       return Response.json({ success: true, data: { name, keysUsed: useKeys.length, keysRemaining: remaining, nextName } });

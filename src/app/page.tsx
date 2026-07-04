@@ -247,7 +247,17 @@ export default function Page() {
             <CardHeader className="pb-3"><CardTitle className="text-sm">渠道配置</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="flex gap-3">
-                <div className="flex-1"><Label className="text-xs">渠道名称</Label><Input value={cfg.channelName || ""} onChange={e => upd("channelName", e.target.value)} />{cfg.channelName && <p className="text-xs text-primary mt-1">下次 → {incName(cfg.channelName)}</p>}</div>
+                <div className="flex-1"><Label className="text-xs">渠道名称</Label><Input value={cfg.channelName || ""} onChange={e => upd("channelName", e.target.value)} />
+                  <div className="flex items-center gap-2 mt-1">
+                    {cfg.fixedName === "1"
+                      ? <p className="text-xs text-muted-foreground">名称固定，不递增</p>
+                      : cfg.channelName && <p className="text-xs text-primary">下次 → {incName(cfg.channelName)}</p>}
+                    <label className="flex items-center gap-1 ml-auto cursor-pointer">
+                      <input type="checkbox" checked={cfg.fixedName === "1"} onChange={e => upd("fixedName", e.target.checked ? "1" : "0")} className="w-3.5 h-3.5 rounded" />
+                      <span className="text-xs text-muted-foreground">固定名称</span>
+                    </label>
+                  </div>
+                </div>
                 <div className="w-[160px]"><Label className="text-xs">渠道类型</Label>
                   <Select value={cfg.channelType || "14"} onValueChange={v => v && upd("channelType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">OpenAI</SelectItem><SelectItem value="14">Anthropic</SelectItem><SelectItem value="3">Azure</SelectItem><SelectItem value="24">其他</SelectItem></SelectContent></Select>
                 </div>
