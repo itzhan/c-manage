@@ -152,8 +152,46 @@ export default function Page() {
   const pendingKeyCount = countLines(newKeys);
 
   return (
-    <div className="max-w-[960px] mx-auto p-6 space-y-4">
-      <h1 className="text-xl font-semibold">渠道上号中枢</h1>
+    <div className="flex h-screen overflow-hidden">
+      {/* Sidebar */}
+      <div className="w-[200px] flex-shrink-0 border-r border-border bg-muted/20 flex flex-col">
+        <div className="p-4 border-b border-border">
+          <h1 className="text-sm font-semibold">渠道上号中枢</h1>
+          <div className="flex items-center gap-1.5 mt-1.5">
+            <span className="text-xs text-muted-foreground">子弹:</span>
+            <Badge variant="secondary" className="text-xs px-1.5 py-0">{poolN}</Badge>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto py-2">
+          <button
+            className={`w-full text-left px-4 py-2 text-sm transition-colors ${showGlobal ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
+            onClick={() => { setShowGlobal(true); setLid(null); }}
+          >全局调度</button>
+          <div className="px-4 py-1.5"><span className="text-[10px] text-muted-foreground uppercase tracking-wider">线路</span></div>
+          {lines.map(l => {
+            const lCfg = l.config || {};
+            return (
+              <button key={l.id}
+                className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between ${!showGlobal && l.id === lid ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
+                onClick={() => { setShowGlobal(false); setLid(l.id); loadLine(l.id, lines); }}
+              >
+                <span className="truncate">{l.label}</span>
+                <span className="flex items-center gap-1 flex-shrink-0">
+                  {lCfg.importDisabled === "1" && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" title="已禁用" />}
+                  {l.activeCount > 0 && <Badge variant="secondary" className="text-[10px] px-1 py-0">{l.activeCount}</Badge>}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="p-2 border-t border-border">
+          <button className="w-full text-sm text-muted-foreground hover:text-primary py-1.5 rounded hover:bg-muted/40 transition-colors" onClick={addLine}>+ 添加线路</button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+      <div className="max-w-[800px] space-y-4">
 
       {/* Key Pool */}
       <Card>
@@ -192,24 +230,6 @@ export default function Page() {
         </CardContent>
       </Card>
 
-      {/* Tab Bar */}
-      <div className="flex items-center border-b border-border">
-        <div className={`px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors font-medium ${showGlobal ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-          onClick={() => { setShowGlobal(true); setLid(null); }}>
-          全局调度
-        </div>
-        <div className="w-px h-5 bg-border mx-1" />
-        {lines.map(l => (
-          <div key={l.id} className={`group flex items-center gap-1.5 px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors ${!showGlobal && l.id === lid ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            onClick={() => { setShowGlobal(false); setLid(l.id); loadLine(l.id, lines); }}>
-            {l.label}
-            {l.activeCount > 0 && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{l.activeCount}</Badge>}
-            <span className="hidden group-hover:inline text-muted-foreground hover:text-foreground text-xs ml-1 cursor-pointer" onClick={e => { e.stopPropagation(); renLine(l.id, l.label); }}>&#9998;</span>
-            {lines.length > 1 && <span className="hidden group-hover:inline text-muted-foreground hover:text-destructive text-xs cursor-pointer" onClick={e => { e.stopPropagation(); delLine(l.id); }}>&#10005;</span>}
-          </div>
-        ))}
-        <button className="px-3 py-2.5 text-lg text-muted-foreground hover:text-primary" onClick={addLine}>+</button>
-      </div>
 
       {/* Global Dispatch Panel */}
       {showGlobal && (
@@ -286,6 +306,14 @@ export default function Page() {
 
       {!showGlobal && lid && (
         <div className="space-y-4">
+          {/* Line Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{lines.find(l => l.id === lid)?.label}</h2>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => { const l = lines.find(x => x.id === lid); if (l) renLine(l.id, l.label); }}>重命名</Button>
+              {lines.length > 1 && <Button size="sm" variant="ghost" className="text-xs h-7 text-destructive" onClick={() => delLine(lid)}>删除</Button>}
+            </div>
+          </div>
           {/* Monitor */}
           <Card>
             <CardHeader className="pb-3">
@@ -447,6 +475,9 @@ export default function Page() {
           </Card>
         </div>
       )}
+
+      </div>
+      </div>
     </div>
   );
 }
