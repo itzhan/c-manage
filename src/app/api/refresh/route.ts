@@ -43,6 +43,7 @@ async function autoImportAllLines(batchSize: number) {
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config) as Record<string, string>;
+    if (cfg.importDisabled === "1") continue;
     const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
     const name = cfg.channelName || "";
     if (!baseUrl || !cfg.authValue || !name) {
@@ -96,7 +97,7 @@ export async function POST() {
   let updated = 0;
   let cooldown = false;
   let needAutoImport = false;
-  let autoImportBatchSize = 10;
+  let autoImportBatchSize = 0;
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config);
@@ -126,13 +127,13 @@ export async function POST() {
       if (latest?.allDisabledSince) {
         db.update(records).set({ frozen: 1 }).where(eq(records.id, latest.id)).run();
         needAutoImport = true;
-        autoImportBatchSize = Math.max(autoImportBatchSize, line.autoBatchSize);
+        autoImportBatchSize = Math.max(autoImportBatchSize, line.autoBatchSize || 10);
       }
     }
   }
 
   if (needAutoImport) {
-    await autoImportAllLines(autoImportBatchSize);
+    await autoImportAllLines(autoImportBatchSize || 10);
     cooldown = true;
   }
 

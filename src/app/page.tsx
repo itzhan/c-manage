@@ -256,6 +256,10 @@ export default function Page() {
                       ? <p className="text-xs text-muted-foreground">名称固定，不递增</p>
                       : cfg.channelName && <p className="text-xs text-primary">下次 → {incName(cfg.channelName)}</p>}
                     <label className="flex items-center gap-1 ml-auto cursor-pointer">
+                      <input type="checkbox" checked={cfg.importDisabled === "1"} onChange={e => upd("importDisabled", e.target.checked ? "1" : "0")} className="w-3.5 h-3.5 rounded" />
+                      <span className="text-xs text-muted-foreground">禁用导入</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
                       <input type="checkbox" checked={cfg.fixedName === "1"} onChange={e => upd("fixedName", e.target.checked ? "1" : "0")} className="w-3.5 h-3.5 rounded" />
                       <span className="text-xs text-muted-foreground">固定名称</span>
                     </label>
@@ -317,7 +321,7 @@ export default function Page() {
               <p className="text-xs text-muted-foreground">从密钥池取出一批 key，同时导入到所有线路的远端 API</p>
               <div className="flex items-center gap-3">
                 <div className="w-[120px]"><Label className="text-xs">每批数量</Label><Input type="number" value={impCount} onChange={e => setImpCount(parseInt(e.target.value) || 0)} /></div>
-                <Button onClick={doImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "全线导入中..." : `全线导入 (${lines.length} 条线路)`}</Button>
+                <Button onClick={doImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "全线导入中..." : `全线导入 (${lines.filter(l => l.config?.importDisabled !== "1").length}/${lines.length} 条线路)`}</Button>
               </div>
               <p className="text-xs text-muted-foreground">{poolN === 0 ? "密钥池为空" : impCount > poolN ? `池中仅${poolN}个，将全部取用` : `取前${impCount}个，剩余${poolN - impCount}个`}</p>
               {impResults.length > 0 && (

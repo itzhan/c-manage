@@ -30,6 +30,10 @@ export async function POST(req: Request) {
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config) as Record<string, string>;
+    if (cfg.importDisabled === "1") {
+      results.push({ lineId: line.id, label: line.label, success: false, error: "已禁用" });
+      continue;
+    }
     const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
     const name = cfg.channelName || "";
 
