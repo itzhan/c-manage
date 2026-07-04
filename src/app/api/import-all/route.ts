@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { keys, lines, records, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, incrementName, getCookie } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, getImportEndpoint, incrementName, getCookie } from "@/lib/channel";
 
 function addLog(lineId: number, message: string, level = "info") {
   db.insert(logs).values({ lineId, message, level }).run();
@@ -42,7 +42,8 @@ export async function POST(req: Request) {
     addLog(line.id, `[全线导入] 导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "info");
 
     const cookie = getCookie(cfg);
-    const payload = buildPayload(cfg, keyStr);
+    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, keyStr) : buildPayload(cfg, keyStr);
+    const endpoint = getImportEndpoint(cfg);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "Accept": "application/json",
@@ -52,7 +53,7 @@ export async function POST(req: Request) {
     if (cookie) headers["Cookie"] = cookie;
 
     try {
-      const resp = await fetch(baseUrl + "/api/channel/", { method: "POST", headers, body: JSON.stringify(payload) });
+      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
       const data = await resp.json();
 
       if (resp.ok && data.success !== false) {

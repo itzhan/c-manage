@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { lines, records, keys, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, incrementName, getCookie } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, getImportEndpoint, incrementName, getCookie } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
 
@@ -53,7 +53,8 @@ async function autoImportAllLines(batchSize: number) {
     addLog(line.id, `[自动全线] 导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "info");
 
     const cookie = getCookie(cfg);
-    const payload = buildPayload(cfg, keyStr);
+    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, keyStr) : buildPayload(cfg, keyStr);
+    const endpoint = getImportEndpoint(cfg);
     const headers: Record<string, string> = {
       "Content-Type": "application/json", "Accept": "application/json",
       "New-API-User": cfg.newApiUser || "3", "Cache-Control": "no-store",
@@ -61,7 +62,7 @@ async function autoImportAllLines(batchSize: number) {
     if (cookie) headers["Cookie"] = cookie;
 
     try {
-      const resp = await fetch(baseUrl + "/api/channel/", { method: "POST", headers, body: JSON.stringify(payload) });
+      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
       const data = await resp.json();
       if (resp.ok && data.success !== false) {
         addLog(line.id, `[自动全线] 成功！`, "ok");

@@ -233,6 +233,9 @@ export default function Page() {
             <CardContent className="space-y-3">
               <div className="flex gap-3">
                 <div className="flex-[2]"><Label className="text-xs">API 地址</Label><Input value={cfg.baseUrl || ""} onChange={e => upd("baseUrl", e.target.value)} /></div>
+                <div className="w-[140px]"><Label className="text-xs">平台类型</Label>
+                  <Select value={cfg.platformType || "newapi"} onValueChange={v => v && upd("platformType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newapi">New API</SelectItem><SelectItem value="naci">Naci Hub</SelectItem></SelectContent></Select>
+                </div>
                 <div className="w-[140px]"><Label className="text-xs">认证方式</Label>
                   <Select value={cfg.authType || "session"} onValueChange={v => v && upd("authType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="session">Session Cookie</SelectItem><SelectItem value="token">Access Token</SelectItem></SelectContent></Select>
                 </div>
@@ -283,6 +286,13 @@ export default function Page() {
                 <div className="flex gap-3"><div className="flex-1"><Label className="text-xs">代理</Label><Input value={cfg.proxyUrl || ""} onChange={e => upd("proxyUrl", e.target.value)} placeholder="socks5://..." /></div>
                   <div className="w-[140px]"><Label className="text-xs">Socks5级别</Label><Select value={cfg.socks5Level || "medium"} onValueChange={v => v && upd("socks5Level", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">low</SelectItem><SelectItem value="medium">medium</SelectItem><SelectItem value="high">high</SelectItem></SelectContent></Select></div>
                 </div>
+                {cfg.platformType === "naci" && <>
+                  <div className="flex gap-3">
+                    <div className="flex-1"><Label className="text-xs">Site IDs (JSON)</Label><Input value={cfg.naciSiteIds || "[21,13,6]"} onChange={e => upd("naciSiteIds", e.target.value)} placeholder="[21,13,6]" /></div>
+                    <div className="w-[120px]"><Label className="text-xs">Provider ID</Label><Input value={cfg.naciProviderId || "3"} onChange={e => upd("naciProviderId", e.target.value)} /></div>
+                  </div>
+                  <div><Label className="text-xs">Site Group Overrides (JSON)</Label><Input value={cfg.naciSiteGroups || "{}"} onChange={e => upd("naciSiteGroups", e.target.value)} placeholder='{"6":["anthropic","default"],"13":["anthropic"]}' /></div>
+                </>}
               </div>}
             </CardContent>
           </Card>

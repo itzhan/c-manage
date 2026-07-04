@@ -22,6 +22,64 @@ export function buildPayload(cfg: Record<string, string>, keyStr: string) {
   };
 }
 
+export function buildNaciPayload(cfg: Record<string, string>, keyStr: string) {
+  const siteIds = JSON.parse(cfg.naciSiteIds || "[21,13,6]");
+  const siteGroupOverrides = JSON.parse(cfg.naciSiteGroups || "{}");
+  const channelJson: Record<string, unknown> = {
+    name: cfg.channelName || "",
+    model_series: "",
+    type: parseInt(cfg.channelType) || 14,
+    key: keyStr.trim(),
+    openai_organization: "",
+    max_input_tokens: 0,
+    base_url: cfg.baseUrlChannel || "",
+    other: "",
+    model_mapping: cfg.modelMapping || "",
+    param_override: "",
+    header_override: "",
+    status_code_mapping: "",
+    models: cfg.models || "",
+    provider_id: parseInt(cfg.naciProviderId || "3"),
+    auto_ban: parseInt(cfg.autoBan) || 1,
+    test_model: cfg.testModel || "",
+    priority: parseInt(cfg.priority) || 7,
+    weight: parseInt(cfg.weight) || 1,
+    tag: cfg.tag || "",
+    settings: JSON.stringify({ allow_service_tier: false }),
+    group: (cfg.groups || "anthropic").split(",")[0].trim(),
+    status: 2,
+    setting: JSON.stringify({ proxy: "", concurrency_protection_enabled: false, max_concurrency: 500, concurrency_protection_threshold: 60, ramp_up_minutes: 5, ramp_recovery_threshold: 54, ramp_reach_threshold: 90, ramp_up_confirm_windows: 1, ramp_down_load_threshold: 10, ramp_down_unhealthy_windows: 2 }),
+    remark: "",
+    other_info: "",
+    channel_info: {},
+    azure_responses_version: "",
+    doubao_asset_ak_sk: "",
+    doubao_asset_host: "",
+    doubao_asset_project_name: "",
+    platform_channel_type: cfg.naciPlatformType || "anthropic_claude",
+    ramp_down_load_threshold: 10,
+    ramp_down_unhealthy_windows: 2,
+    ramp_reach_threshold: 90,
+    ramp_recovery_threshold: 54,
+    ramp_up_confirm_windows: 1,
+  };
+  return {
+    name: cfg.channelName || "",
+    description: "",
+    channel_json: JSON.stringify(channelJson, null, 2),
+    last_selected_site_ids_json: JSON.stringify(siteIds),
+    owner_user_id: cfg.naciOwnerUserId ? parseInt(cfg.naciOwnerUserId) : null,
+    site_group_overrides: siteGroupOverrides,
+    site_publish_settings: {},
+  };
+}
+
+export function getImportEndpoint(cfg: Record<string, string>): string {
+  const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+  if (cfg.platformType === "naci") return baseUrl + "/api/admin-hub/channels/";
+  return baseUrl + "/api/channel/";
+}
+
 export async function proxyFetch(targetUrl: string, opts: { cookie?: string; body?: unknown; method?: string; newApiUser?: string }) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
