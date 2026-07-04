@@ -74,10 +74,41 @@ export function buildNaciPayload(cfg: Record<string, string>, keyStr: string) {
   };
 }
 
+export function buildSub2apiPayload(cfg: Record<string, string>, key: string) {
+  const siteIds = JSON.parse(cfg.sub2apiSiteIds || "[]");
+  return {
+    key: key.trim(),
+    alias: cfg.channelName || "",
+    key_type: cfg.sub2apiKeyType || "anthropic",
+    site_ids: siteIds,
+    tag_suffix: cfg.tag || "",
+    aws_v: "",
+    proxy_ids: [],
+    channel_name: "",
+  };
+}
+
 export function getImportEndpoint(cfg: Record<string, string>): string {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
   if (cfg.platformType === "naci") return baseUrl + "/api/admin-hub/channels/";
+  if (cfg.platformType === "sub2api") return baseUrl + "/api/user/api-keys";
   return baseUrl + "/api/channel/";
+}
+
+export function getAuthHeaders(cfg: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "Cache-Control": "no-store",
+  };
+  if (cfg.platformType === "sub2api") {
+    headers["Authorization"] = cfg.authValue || "";
+  } else {
+    headers["New-API-User"] = cfg.newApiUser || "3";
+    const cookie = getCookie(cfg);
+    if (cookie) headers["Cookie"] = cookie;
+  }
+  return headers;
 }
 
 export async function proxyFetch(targetUrl: string, opts: { cookie?: string; body?: unknown; method?: string; newApiUser?: string }) {

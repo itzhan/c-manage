@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { lines, records, keys, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, getImportEndpoint, incrementName, getCookie } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName, getCookie } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
 
@@ -44,31 +44,45 @@ async function importToLine(line: any, cfg: Record<string, string>, useKeys: str
   const name = cfg.channelName || "";
   if (!baseUrl || !cfg.authValue || !name) return false;
 
-  const lineKeyStr = "\n" + useKeys.join("\n");
-  const cookie = getCookie(cfg);
-  const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
   const endpoint = getImportEndpoint(cfg);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json", "Accept": "application/json",
-    "New-API-User": cfg.newApiUser || "3", "Cache-Control": "no-store",
-  };
-  if (cookie) headers["Cookie"] = cookie;
+  const headers = getAuthHeaders(cfg);
 
   try {
-    const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-    const data = await resp.json();
-    if (resp.ok && data.success !== false) {
-      addLog(line.id, `[自动上弹] 成功！导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "ok");
-      db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
-      if (cfg.fixedName !== "1") {
+    let ok = false;
+    if (cfg.platformType === "sub2api") {
+      let success = 0;
+      for (const key of useKeys) {
+        const payload = buildSub2apiPayload(cfg, key);
+        try {
+          const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+          const data = await resp.json();
+          if (resp.ok && !data.error) success++;
+        } catch { /* skip */ }
+      }
+      ok = success > 0;
+      addLog(line.id, `[自动上弹] Sub2API: 成功${success}/${useKeys.length}`, success > 0 ? "ok" : "err");
+    } else {
+      const lineKeyStr = "\n" + useKeys.join("\n");
+      const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
+      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+      const data = await resp.json();
+      if (resp.ok && data.success !== false) {
+        addLog(line.id, `[自动上弹] 成功！导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "ok");
+        ok = true;
+      } else {
+        addLog(line.id, `[自动上弹] 失败: ${data.message || ""}`, "err");
+      }
+    }
+
+    if (ok) {
+      db.insert(records).values({ lineId: line.id, name: name || cfg.baseUrl, keyCount: useKeys.length }).run();
+      if (cfg.fixedName !== "1" && name) {
         const nextName = incrementName(name);
         cfg.channelName = nextName;
         db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
         addLog(line.id, `[自动上弹] 名称递增 → ${nextName}`, "info");
       }
       return true;
-    } else {
-      addLog(line.id, `[自动上弹] 失败: ${data.message || ""}`, "err");
     }
   } catch (e: unknown) {
     addLog(line.id, `[自动上弹] 请求失败: ${e instanceof Error ? e.message : String(e)}`, "err");

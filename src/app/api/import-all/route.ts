@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { keys, lines, records, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, getImportEndpoint, incrementName, getCookie } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
 
 function addLog(lineId: number, message: string, level = "info") {
   db.insert(logs).values({ lineId, message, level }).run();
@@ -90,38 +90,49 @@ export async function POST(req: Request) {
       continue;
     }
 
-    const lineKeyStr = "\n" + lineKeys.join("\n");
-    addLog(line.id, `[导入] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
+    addLog(line.id, `[导入] 导入 ${lineKeys.length} 个密钥 → 「${name || baseUrl}」`, "info");
 
-    const cookie = getCookie(cfg);
-    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
     const endpoint = getImportEndpoint(cfg);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-      "New-API-User": cfg.newApiUser || "3",
-      "Cache-Control": "no-store",
-    };
-    if (cookie) headers["Cookie"] = cookie;
+    const headers = getAuthHeaders(cfg);
 
     try {
-      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-      const data = await resp.json();
+      let importOk = false;
 
-      if (resp.ok && data.success !== false) {
-        addLog(line.id, `[导入] 成功！`, "ok");
-        db.insert(records).values({ lineId: line.id, name, keyCount: lineKeys.length }).run();
-        if (cfg.fixedName !== "1") {
+      if (cfg.platformType === "sub2api") {
+        let success = 0;
+        for (const key of lineKeys) {
+          const p = buildSub2apiPayload(cfg, key);
+          try { const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(p) }); const d = await r.json(); if (r.ok && !d.error) success++; } catch { /* skip */ }
+        }
+        importOk = success > 0;
+        addLog(line.id, `[导入] Sub2API: 成功${success}/${lineKeys.length}`, success > 0 ? "ok" : "err");
+      }
+
+      if (cfg.platformType !== "sub2api") {
+        const lineKeyStr = "\n" + lineKeys.join("\n");
+        const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
+        const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+        const data = await resp.json();
+        if (resp.ok && data.success !== false) {
+          addLog(line.id, `[导入] 成功！`, "ok");
+          importOk = true;
+        } else {
+          addLog(line.id, `[导入] 失败: ${data.message || ""}`, "err");
+        }
+      }
+
+      if (importOk) {
+        db.insert(records).values({ lineId: line.id, name: name || baseUrl, keyCount: lineKeys.length }).run();
+        if (cfg.fixedName !== "1" && name) {
           const nextName = incrementName(name);
           cfg.channelName = nextName;
           db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
           addLog(line.id, `[导入] 名称递增 → ${nextName}`, "info");
         }
-        results.push({ lineId: line.id, label: line.label, success: true, name, keyCount: lineKeys.length });
+        results.push({ lineId: line.id, label: line.label, success: true, name: name || baseUrl, keyCount: lineKeys.length });
         anySuccess = true;
       } else {
-        addLog(line.id, `[导入] 失败: ${data.message || ""}`, "err");
-        results.push({ lineId: line.id, label: line.label, success: false, error: data.message || "远端返回失败", keyCount: lineKeys.length });
+        results.push({ lineId: line.id, label: line.label, success: false, error: "导入失败", keyCount: lineKeys.length });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

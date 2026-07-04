@@ -459,7 +459,7 @@ export default function Page() {
               <div className="flex gap-3">
                 <div className="flex-[2]"><Label className="text-xs">API 地址</Label><Input value={cfg.baseUrl || ""} onChange={e => upd("baseUrl", e.target.value)} /></div>
                 <div className="w-[140px]"><Label className="text-xs">平台类型</Label>
-                  <Select value={cfg.platformType || "newapi"} onValueChange={v => v && upd("platformType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newapi">New API</SelectItem><SelectItem value="naci">Naci Hub</SelectItem></SelectContent></Select>
+                  <Select value={cfg.platformType || "newapi"} onValueChange={v => v && upd("platformType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newapi">New API</SelectItem><SelectItem value="naci">Naci Hub</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select>
                 </div>
                 <div className="w-[140px]"><Label className="text-xs">认证方式</Label>
                   <Select value={cfg.authType || "session"} onValueChange={v => v && upd("authType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="session">Session Cookie</SelectItem><SelectItem value="token">Access Token</SelectItem></SelectContent></Select>
@@ -521,6 +521,12 @@ export default function Page() {
                 {cfg.platformType === "naci" && <>
                   <div className="flex gap-3"><div className="flex-1"><Label className="text-xs">Site IDs</Label><Input value={cfg.naciSiteIds || "[21,13,6]"} onChange={e => upd("naciSiteIds", e.target.value)} /></div><div className="w-[120px]"><Label className="text-xs">Provider ID</Label><Input value={cfg.naciProviderId || "3"} onChange={e => upd("naciProviderId", e.target.value)} /></div></div>
                   <div><Label className="text-xs">Site Groups</Label><Input value={cfg.naciSiteGroups || "{}"} onChange={e => upd("naciSiteGroups", e.target.value)} /></div>
+                </>}
+                {cfg.platformType === "sub2api" && <>
+                  <div className="flex gap-3">
+                    <div className="flex-1"><Label className="text-xs">Site IDs (JSON)</Label><Input value={cfg.sub2apiSiteIds || "[]"} onChange={e => upd("sub2apiSiteIds", e.target.value)} placeholder="[30,32,33]" /></div>
+                    <div className="w-[140px]"><Label className="text-xs">Key Type</Label><Input value={cfg.sub2apiKeyType || "anthropic"} onChange={e => upd("sub2apiKeyType", e.target.value)} /></div>
+                  </div>
                 </>}
               </div>}
             </CardContent>
