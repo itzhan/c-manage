@@ -50,6 +50,13 @@ export default function Page() {
   const [paused, setPaused] = useState(false);
   const [showAdv, setShowAdv] = useState(false);
 
+  // Global dispatch tab
+  const [showGlobal, setShowGlobal] = useState(false);
+  const [gdBatch, setGdBatch] = useState(10);
+  const [gdRatios, setGdRatios] = useState<Record<string, number>>({});
+  const [gdBusy, setGdBusy] = useState(false);
+  const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; name?: string; error?: string; keyCount?: number }>>([]);
+
   // Use refs for timer callback to avoid re-creating interval on every state change
   const lidRef = useRef(lid);
   const pgRef = useRef(pg);
@@ -130,6 +137,14 @@ export default function Page() {
     }
   };
 
+  const doGlobalImport = async () => {
+    setGdBusy(true); setGdResults([]);
+    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: gdBatch, lineRatios: gdRatios }) }).then(r => r.json());
+    setGdBusy(false);
+    if (r.success) setGdResults(r.data.results);
+    fPool(); fLines();
+  };
+
   const saveAuto = async (on: boolean, bs: number) => { setAutoOn(on); setAutoBatch(bs); if (lid) fetch(`/api/lines/${lid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: on, autoBatchSize: bs }) }); };
   const clrLogs = async () => { if (!lid) return; await fetch(`/api/lines/${lid}/logs`, { method: "DELETE" }); setLogs([]); };
 
@@ -179,9 +194,14 @@ export default function Page() {
 
       {/* Tab Bar */}
       <div className="flex items-center border-b border-border">
+        <div className={`px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors font-medium ${showGlobal ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          onClick={() => { setShowGlobal(true); setLid(null); }}>
+          全局调度
+        </div>
+        <div className="w-px h-5 bg-border mx-1" />
         {lines.map(l => (
-          <div key={l.id} className={`group flex items-center gap-1.5 px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors ${l.id === lid ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            onClick={() => { setLid(l.id); loadLine(l.id, lines); }}>
+          <div key={l.id} className={`group flex items-center gap-1.5 px-4 py-2.5 text-sm cursor-pointer border-b-2 transition-colors ${!showGlobal && l.id === lid ? "border-primary text-foreground font-medium" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => { setShowGlobal(false); setLid(l.id); loadLine(l.id, lines); }}>
             {l.label}
             {l.activeCount > 0 && <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{l.activeCount}</Badge>}
             <span className="hidden group-hover:inline text-muted-foreground hover:text-foreground text-xs ml-1 cursor-pointer" onClick={e => { e.stopPropagation(); renLine(l.id, l.label); }}>&#9998;</span>
@@ -191,7 +211,80 @@ export default function Page() {
         <button className="px-3 py-2.5 text-lg text-muted-foreground hover:text-primary" onClick={addLine}>+</button>
       </div>
 
-      {lid && (
+      {/* Global Dispatch Panel */}
+      {showGlobal && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3"><CardTitle className="text-sm">全局调度</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-[140px]">
+                  <Label className="text-xs">每批数量</Label>
+                  <Input type="number" min={1} value={gdBatch} onChange={e => setGdBatch(parseInt(e.target.value) || 1)} />
+                </div>
+                <div className="mt-5">
+                  <Button onClick={doGlobalImport} disabled={gdBusy || poolN === 0}>
+                    {gdBusy ? "导入中..." : `全局导入 (池: ${poolN})`}
+                  </Button>
+                </div>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>线路</TableHead>
+                    <TableHead className="w-[100px]">比例</TableHead>
+                    <TableHead className="w-[80px]">数量</TableHead>
+                    <TableHead className="w-[80px]">状态</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lines.map(l => {
+                    const lCfg = l.config || {};
+                    const ratio = gdRatios[String(l.id)] ?? (lCfg.importDisabled === "1" ? 0 : 100);
+                    const n = Math.round(gdBatch * ratio / 100);
+                    const result = gdResults.find(r => r.lineId === l.id);
+                    return (
+                      <TableRow key={l.id}>
+                        <TableCell>
+                          <div>
+                            <span className="font-medium text-sm">{l.label}</span>
+                            {lCfg.channelName && <span className="text-xs text-muted-foreground ml-2">{lCfg.channelName}</span>}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1.5">
+                            <Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio}
+                              onChange={e => setGdRatios(r => ({ ...r, [String(l.id)]: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)) }))} />
+                            <span className="text-xs text-muted-foreground">%</span>
+                          </div>
+                        </TableCell>
+                        <TableCell><span className="tabular-nums text-sm font-mono">{n}</span></TableCell>
+                        <TableCell>
+                          {result ? (
+                            <span className={`text-xs ${result.success ? "text-green-500" : "text-red-500"}`}>
+                              {result.success ? `✓ ${result.keyCount}个` : result.error}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{ratio === 0 ? "跳过" : "待导入"}</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+
+              <p className="text-xs text-muted-foreground">
+                比例 100% = 全部 key · 0% = 跳过 · 小于 100% 随机选取并四舍五入
+                {poolN === 0 ? " · 密钥池为空" : gdBatch > poolN ? ` · 池中仅 ${poolN} 个，将全部取用` : ""}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {!showGlobal && lid && (
         <div className="space-y-4">
           {/* Monitor */}
           <Card>
