@@ -51,10 +51,14 @@ async function autoImportAllLines(batchSize: number) {
       continue;
     }
 
-    addLog(line.id, `[自动全线] 导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "info");
+    const lineBatchSize = parseInt(cfg.importBatchSize) || 0;
+    const lineKeys = lineBatchSize > 0 ? useKeys.slice(0, lineBatchSize) : useKeys;
+    const lineKeyStr = "\n" + lineKeys.join("\n");
+
+    addLog(line.id, `[自动全线] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
 
     const cookie = getCookie(cfg);
-    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, keyStr) : buildPayload(cfg, keyStr);
+    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
     const endpoint = getImportEndpoint(cfg);
     const headers: Record<string, string> = {
       "Content-Type": "application/json", "Accept": "application/json",
@@ -67,7 +71,7 @@ async function autoImportAllLines(batchSize: number) {
       const data = await resp.json();
       if (resp.ok && data.success !== false) {
         addLog(line.id, `[自动全线] 成功！`, "ok");
-        db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
+        db.insert(records).values({ lineId: line.id, name, keyCount: lineKeys.length }).run();
         if (cfg.fixedName === "1") {
           addLog(line.id, `[自动全线] 渠道名称固定，不递增`, "info");
         } else {

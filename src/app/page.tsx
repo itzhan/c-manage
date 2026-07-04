@@ -269,6 +269,7 @@ export default function Page() {
                     </label>
                   </div>
                 </div>
+                <div className="w-[100px]"><Label className="text-xs">每批数量</Label><Input type="number" min={0} value={cfg.importBatchSize || ""} onChange={e => upd("importBatchSize", e.target.value)} placeholder="0=全部" /><p className="text-xs text-muted-foreground mt-0.5">{parseInt(cfg.importBatchSize) > 0 ? `取前${cfg.importBatchSize}个` : "全部"}</p></div>
                 <div className="w-[160px]"><Label className="text-xs">渠道类型</Label>
                   <Select value={cfg.channelType || "14"} onValueChange={v => v && upd("channelType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="1">OpenAI</SelectItem><SelectItem value="14">Anthropic</SelectItem><SelectItem value="3">Azure</SelectItem><SelectItem value="24">其他</SelectItem></SelectContent></Select>
                 </div>

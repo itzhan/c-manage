@@ -43,10 +43,14 @@ export async function POST(req: Request) {
       continue;
     }
 
-    addLog(line.id, `[全线导入] 导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "info");
+    const lineBatchSize = parseInt(cfg.importBatchSize) || 0;
+    const lineKeys = lineBatchSize > 0 ? useKeys.slice(0, lineBatchSize) : useKeys;
+    const lineKeyStr = "\n" + lineKeys.join("\n");
+
+    addLog(line.id, `[全线导入] 导入 ${lineKeys.length} 个密钥 → 渠道「${name}」`, "info");
 
     const cookie = getCookie(cfg);
-    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, keyStr) : buildPayload(cfg, keyStr);
+    const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
     const endpoint = getImportEndpoint(cfg);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -62,7 +66,7 @@ export async function POST(req: Request) {
 
       if (resp.ok && data.success !== false) {
         addLog(line.id, `[全线导入] 成功！`, "ok");
-        db.insert(records).values({ lineId: line.id, name, keyCount: useKeys.length }).run();
+        db.insert(records).values({ lineId: line.id, name, keyCount: lineKeys.length }).run();
         if (cfg.fixedName === "1") {
           addLog(line.id, `[全线导入] 渠道名称固定，不递增`, "info");
         } else {
