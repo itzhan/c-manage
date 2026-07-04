@@ -113,11 +113,21 @@ export default function Page() {
   const delRec = async (rid: number) => { if (!lid) return; await fetch(`/api/lines/${lid}/records?recordId=${rid}`, { method: "DELETE" }); fRecs(lid, pg); fLines(); };
   const clrRecs = async () => { if (!lid || !confirm("确认清空？")) return; await fetch(`/api/lines/${lid}/records`, { method: "DELETE" }); fRecs(lid, 1); setPg(1); fLines(); };
 
+  const [impResults, setImpResults] = useState<Array<{ label: string; success: boolean; name?: string; error?: string }>>([]);
+
   const doImport = async () => {
-    if (!lid) return; setImpBusy(true);
-    const r = await fetch(`/api/lines/${lid}/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: impCount }) }).then(r => r.json());
-    setImpBusy(false); fPool(); fRecs(lid, pg); fLogs(lid); fLines();
-    if (r.success) setCfg(c => ({ ...c, channelName: r.data.nextName }));
+    setImpBusy(true); setImpResults([]);
+    const r = await fetch("/api/import-all", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: impCount }) }).then(r => r.json());
+    setImpBusy(false);
+    if (r.success) setImpResults(r.data.results);
+    fPool(); fLines();
+    if (lid) { fRecs(lid, pg); fLogs(lid); }
+    // 刷新当前线路的 config（名称可能已递增）
+    if (r.success) {
+      const ls = await fLines();
+      const l = ls.find((x: Line) => x.id === lid);
+      if (l) setCfg(l.config);
+    }
   };
 
   const saveAuto = async (on: boolean, bs: number) => { setAutoOn(on); setAutoBatch(bs); if (lid) fetch(`/api/lines/${lid}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: on, autoBatchSize: bs }) }); };
@@ -280,15 +290,25 @@ export default function Page() {
             </CardContent>
           </Card>
 
-          {/* Manual Import */}
+          {/* Import All Lines */}
           <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">手动导入</CardTitle></CardHeader>
-            <CardContent>
+            <CardHeader className="pb-3"><CardTitle className="text-sm">全线导入</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">从密钥池取出一批 key，同时导入到所有线路的远端 API</p>
               <div className="flex items-center gap-3">
-                <div className="w-[120px]"><Label className="text-xs">取用数量</Label><Input type="number" value={impCount} onChange={e => setImpCount(parseInt(e.target.value) || 0)} /></div>
-                <Button onClick={doImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "导入中..." : "批量导入"}</Button>
+                <div className="w-[120px]"><Label className="text-xs">每批数量</Label><Input type="number" value={impCount} onChange={e => setImpCount(parseInt(e.target.value) || 0)} /></div>
+                <Button onClick={doImport} disabled={impBusy || poolN === 0} className="mt-5">{impBusy ? "全线导入中..." : `全线导入 (${lines.length} 条线路)`}</Button>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">{poolN === 0 ? "密钥池为空" : impCount > poolN ? `池中仅${poolN}个` : `取前${impCount}个，剩余${poolN - impCount}个`}</p>
+              <p className="text-xs text-muted-foreground">{poolN === 0 ? "密钥池为空" : impCount > poolN ? `池中仅${poolN}个，将全部取用` : `取前${impCount}个，剩余${poolN - impCount}个`}</p>
+              {impResults.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {impResults.map((r, i) => (
+                    <div key={i} className={`text-xs ${r.success ? "text-green-500" : "text-red-500"}`}>
+                      {r.label}: {r.success ? `成功 → ${r.name}` : `失败 — ${r.error}`}
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
