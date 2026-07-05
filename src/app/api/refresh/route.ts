@@ -4,6 +4,7 @@ import { eq, asc } from "drizzle-orm";
 import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName, getCookie } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
+const BILLING_GRACE = 3 * 60;
 
 function addLog(lineId: number, message: string, level = "info") {
   db.insert(logs).values({ lineId, message, level }).run();
@@ -164,7 +165,19 @@ export async function POST() {
     const recs = db.select().from(records).where(eq(records.lineId, line.id)).all();
 
     for (const r of recs) {
-      if (r.frozen) continue;
+      // Frozen records: still query billing for 3 min grace period
+      if (r.frozen) {
+        const frozenAt = r.allDisabledSince ? r.allDisabledSince + FREEZE_AFTER : 0;
+        if (frozenAt && now - frozenAt < BILLING_GRACE) {
+          const channels = await fetchChannels(cfg, r.name);
+          if (channels) {
+            const totalQuota = channels.reduce((s, ch) => s + (ch.used_quota || 0), 0);
+            db.update(records).set({ cachedQuota: totalQuota, lastRefresh: now }).where(eq(records.id, r.id)).run();
+            updated++;
+          }
+        }
+        continue;
+      }
       const channels = await fetchChannels(cfg, r.name);
       if (!channels) continue;
       const totalQuota = channels.reduce((s, ch) => s + (ch.used_quota || 0), 0);
@@ -180,6 +193,7 @@ export async function POST() {
       updated++;
     }
 
+    // Auto-import: trigger immediately when latest batch is all disabled (don't wait for freeze)
     if (line.autoEnabled) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
       const latest = unfrozen.length > 0 ? unfrozen[unfrozen.length - 1] : null;
