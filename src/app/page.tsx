@@ -53,6 +53,7 @@ export default function Page() {
   // Dashboard
   const [showDashboard, setShowDashboard] = useState(true);
   const [expandedLine, setExpandedLine] = useState<number | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const [gdBusy, setGdBusy] = useState(false);
   const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; error?: string; keyCount?: number }>>([]);
   const [groupImpCount, setGroupImpCount] = useState<Record<string, number>>({});
@@ -264,20 +265,28 @@ export default function Page() {
       {/* === Dashboard === */}
       {showDashboard && (
         <div className="space-y-4">
+          {lines.filter(l => l.config?.hidden === "1").length > 0 && (
+            <div className="flex justify-end">
+              <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowHidden(!showHidden)}>
+                {showHidden ? "隐藏已隐藏" : `显示已隐藏 (${lines.filter(l => l.config?.hidden === "1").length})`}
+              </button>
+            </div>
+          )}
           {/* All lines as cards */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {lines.map(l => {
+          <div className="grid grid-cols-2 gap-3">
+            {[...lines].sort((a, b) => (a.config?.pinned === "1" ? 0 : 1) - (b.config?.pinned === "1" ? 0 : 1)).filter(l => showHidden || l.config?.hidden !== "1").map(l => {
               const lCfg = l.config || {};
               const mode = lCfg.importMode || "independent";
               const isGlobal = mode === "global";
-              const expanded = expandedLine === l.id;
+              const isHidden = lCfg.hidden === "1";
+              const isPinned = lCfg.pinned === "1";
               const rpm = lineRpm[l.id];
               const groupBatch = parseInt(lCfg.globalGroupBatch) || 10;
 
               return (
-                <Card key={l.id} className={`${expanded ? "ring-1 ring-primary/30 lg:col-span-2" : ""}`}>
+                <Card key={l.id} className={`${isPinned ? "ring-1 ring-amber-400/40" : ""} ${isHidden ? "opacity-50" : ""}`}>
                   {/* Header */}
-                  <div className="flex items-center gap-2 px-4 py-3 cursor-pointer" onClick={() => setExpandedLine(expanded ? null : l.id)}>
+                  <div className="flex items-center gap-2 px-3 py-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium text-sm">{l.label}</span>
@@ -286,17 +295,19 @@ export default function Page() {
                       </div>
                       {lCfg.channelName && <p className="text-[11px] text-muted-foreground truncate">{lCfg.channelName}</p>}
                     </div>
-                    {rpm && rpm.rpm > 0 && <span className="text-xs font-mono tabular-nums text-amber-600">{rpm.rpm} rpm</span>}
-                    <Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[10px]">{l.activeCount}</Badge>
+                    {rpm && rpm.rpm > 0 && <span className="text-[11px] font-mono tabular-nums text-amber-600">{rpm.rpm}rpm</span>}
+                    <Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[9px]">{l.activeCount}</Badge>
                     <div className="text-right text-[10px] tabular-nums text-muted-foreground leading-tight">
-                      <div>今日 <strong className="text-foreground">{l.todayKeys}</strong></div>
-                      <div>总计 <strong className="text-foreground">{l.totalKeys}</strong></div>
+                      <div>今{l.todayKeys} / 总{l.totalKeys}</div>
+                    </div>
+                    <div className="flex gap-0.5">
+                      <button onClick={e => { e.stopPropagation(); fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, pinned: isPinned ? "0" : "1" } }) }); fLines(); }} className={`text-[10px] px-1 rounded ${isPinned ? "text-amber-500" : "text-muted-foreground/40 hover:text-amber-400"}`} title="置顶">★</button>
+                      <button onClick={e => { e.stopPropagation(); fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, hidden: isHidden ? "0" : "1" } }) }); fLines(); }} className="text-[10px] text-muted-foreground/40 hover:text-muted-foreground" title={isHidden ? "显示" : "隐藏"}>{isHidden ? "👁" : "×"}</button>
                     </div>
                   </div>
 
-                  {/* Expanded detail */}
-                  {expanded && (
-                    <div className="px-4 pb-4 border-t space-y-3 pt-3">
+                  {/* Detail — always visible */}
+                  <div className="px-3 pb-3 border-t space-y-2 pt-2">
                       {/* RPM bar */}
                       {rpm && (
                         <div className="flex gap-4 text-xs">
@@ -359,43 +370,62 @@ export default function Page() {
                         )}
                         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情 →</Button>
                       </div>
-                    </div>
-                  )}
+                  </div>
                 </Card>
               );
             })}
           </div>
 
-          {/* Group management */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">分组管理</CardTitle></CardHeader>
-            <CardContent>
-              <div className="space-y-1.5">
-                {lines.map(l => {
-                  const lCfg = l.config || {};
-                  const mode = lCfg.importMode || "independent";
-                  return (
-                    <div key={l.id} className="flex items-center gap-2 py-1">
-                      <span className="text-sm flex-1 truncate">{l.label}</span>
-                      <Select value={mode} onValueChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, importMode: v } }) }); fLines(); }}>
-                        <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent><SelectItem value="independent">单独</SelectItem><SelectItem value="global">分组</SelectItem></SelectContent>
-                      </Select>
-                      {mode === "global" ? (
-                        <Select value={lCfg.globalGroup || ""} onValueChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalGroup: v } }) }); fLines(); }}>
-                          <SelectTrigger className="h-7 w-32 text-xs"><SelectValue placeholder="选择分组" /></SelectTrigger>
-                          <SelectContent>
-                            {allGroups.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
-                            <SelectItem value="__new__">+ 新分组</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : <div className="w-32" />}
+          {/* Group management — card per group */}
+          <h3 className="text-sm font-medium text-muted-foreground">分组管理</h3>
+          <div className="grid grid-cols-2 gap-3">
+            {/* Existing groups */}
+            {Array.from(groupedLines.entries()).map(([group, gLines]) => {
+              const totalToday = gLines.reduce((s, l) => s + l.todayKeys, 0);
+              const totalAll = gLines.reduce((s, l) => s + l.totalKeys, 0);
+              return (
+                <Card key={group}>
+                  <CardContent className="pt-3 pb-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-600">{group}</span>
+                      <span className="text-[10px] text-muted-foreground tabular-nums">今{totalToday} / 总{totalAll}</span>
                     </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+                    <div className="space-y-1">
+                      {gLines.map(l => (
+                        <div key={l.id} className="flex items-center gap-2 text-xs">
+                          <span className="flex-1 truncate">{l.label}</span>
+                          <span className="tabular-nums text-muted-foreground">{parseInt(l.config?.globalRatio) || 100}%</span>
+                          <span className="tabular-nums">{l.todayKeys}/{l.totalKeys}</span>
+                          <button onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...l.config, importMode: "independent", globalGroup: "" } }) }); fLines(); }} className="text-[9px] text-muted-foreground hover:text-destructive">移出</button>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+
+            {/* Unassigned lines — can be added to groups */}
+            <Card>
+              <CardContent className="pt-3 pb-3 space-y-2">
+                <span className="text-sm font-medium text-muted-foreground">未分组线路</span>
+                <div className="space-y-1">
+                  {independentLines.map(l => (
+                    <div key={l.id} className="flex items-center gap-2 text-xs">
+                      <span className="flex-1 truncate">{l.label}</span>
+                      <Select value="" onValueChange={v => { if (v) { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...l.config, importMode: "global", globalGroup: v } }) }); fLines(); } }}>
+                        <SelectTrigger className="h-6 w-28 text-[10px]"><SelectValue placeholder="加入分组..." /></SelectTrigger>
+                        <SelectContent>
+                          {allGroups.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                          <SelectItem value="__new__">+ 新分组</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
 
