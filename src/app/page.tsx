@@ -56,6 +56,7 @@ export default function Page() {
   const [gdBusy, setGdBusy] = useState(false);
   const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; error?: string; keyCount?: number }>>([]);
   const [groupImpCount, setGroupImpCount] = useState<Record<string, number>>({});
+  const [lineRpm, setLineRpm] = useState<Record<number, { rpm: number; tpm: number; quota: number }>>({});
 
   const lidRef = useRef(lid);
   const pgRef = useRef(pg);
@@ -104,6 +105,22 @@ export default function Page() {
 
   const addKeys = async () => { const k = newKeys.split("\n").map(s => s.trim()).filter(Boolean); if (!k.length) return; await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: k }) }); setNewKeys(""); fPool(); };
   const clearPool = async () => { if (!confirm("确认清空密钥池？")) return; await fetch("/api/keys", { method: "DELETE" }); fPool(); };
+
+  // RPM polling
+  useEffect(() => {
+    if (!showDashboard || lines.length === 0) return;
+    const fetchRpm = async () => {
+      for (const l of lines) {
+        try {
+          const r = await fetch(`/api/lines/${l.id}/rpm`);
+          if (r.ok) { const d = await r.json(); setLineRpm(prev => ({ ...prev, [l.id]: d })); }
+        } catch { /* ignore */ }
+      }
+    };
+    fetchRpm();
+    const t = setInterval(fetchRpm, 30000);
+    return () => clearInterval(t);
+  }, [showDashboard, lines.length]);
 
   const addLine = async () => { const label = prompt("线路名称:", `线路${lines.length + 1}`); if (!label?.trim()) return; const r = await fetch("/api/lines", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: label.trim() }) }).then(r => r.json()); if (r.success) { const ls = await fLines(); setShowDashboard(false); setLid(r.data.id); loadLine(r.data.id, ls); } };
   const renLine = async (id: number, old: string) => { const l = prompt("线路名称:", old); if (!l?.trim()) return; await fetch(`/api/lines/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: l.trim() }) }); fLines(); };
@@ -247,107 +264,99 @@ export default function Page() {
       {/* === Dashboard === */}
       {showDashboard && (
         <div className="space-y-4">
-          {/* Grouped pools - each group is a card */}
-          {Array.from(groupedLines.entries()).map(([group, gLines]) => {
-            const groupBatch = parseInt(gLines[0]?.config?.globalGroupBatch) || 10;
-            const groupAutoOn = gLines.some(l => l.autoEnabled);
-            const gImpCount = groupImpCount[group] ?? groupBatch;
-            return (
-              <Card key={group}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 text-xs font-semibold">{group}</span>
-                      <Badge variant="secondary" className="text-[10px]">{gLines.length} 线路</Badge>
-                      <span className="text-xs text-muted-foreground">今日 {gLines.reduce((s, l) => s + l.todayKeys, 0)} · 总计 {gLines.reduce((s, l) => s + l.totalKeys, 0)}</span>
-                    </CardTitle>
-                    <div className="flex items-center gap-2">
-                      <Switch checked={groupAutoOn} onCheckedChange={v => saveGroupAuto(group, v, groupBatch)} />
-                      <span className="text-xs text-muted-foreground">自动</span>
-                      <Label className="text-xs">每批</Label>
-                      <Input type="number" className="w-14 h-6 text-xs" value={groupBatch}
-                        onChange={e => { const v = parseInt(e.target.value) || 1; for (const l of gLines) fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...l.config, globalGroupBatch: String(v) }, autoBatchSize: v }) }); fLines(); }} />
-                      <Input type="number" className="w-14 h-6 text-xs" value={gImpCount}
-                        onChange={e => setGroupImpCount(p => ({ ...p, [group]: parseInt(e.target.value) || 1 }))} />
-                      <Button size="sm" className="h-6 text-xs px-2" disabled={gdBusy || poolN === 0}
-                        onClick={() => doGroupImport(group, gImpCount)}>
-                        {gdBusy ? "..." : "上弹"}
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                  {gLines.map(l => {
-                    const lCfg = l.config || {};
-                    const ratio = parseInt(lCfg.globalRatio) || 100;
-                    const expanded = expandedLine === l.id;
-                    const r = gdResults.find(x => x.lineId === l.id);
-                    return (
-                      <div key={l.id} className={`border rounded-md transition-all ${expanded ? "bg-muted/20" : "hover:bg-muted/10"}`}>
-                        <div className="flex items-center gap-3 px-3 py-2 cursor-pointer" onClick={() => setExpandedLine(expanded ? null : l.id)}>
-                          <div className="flex-1 min-w-0">
-                            <span className="font-medium text-sm">{l.label}</span>
-                            {lCfg.channelName && <span className="text-xs text-muted-foreground ml-1.5">{lCfg.channelName}</span>}
-                            {r && <span className={`text-xs ml-1.5 ${r.success ? "text-green-500" : "text-red-500"}`}>{r.success ? `✓${r.keyCount}` : r.error}</span>}
-                          </div>
-                          <span className="text-xs tabular-nums text-muted-foreground">{ratio}%</span>
-                          <Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[10px]">{l.activeCount}活跃</Badge>
-                          <div className="flex gap-0.5">{(l.last5 || []).map((rec, i) => {
-                            let color = "bg-green-500"; if (rec.frozen) color = "bg-muted-foreground/30"; else if (rec.allDisabledSince) color = "bg-yellow-500";
-                            return <span key={i} title={`${rec.name}: ${rec.keyCount}个`} className={`inline-block w-4 h-4 rounded text-[8px] text-white flex items-center justify-center ${color}`}>{rec.keyCount}</span>;
-                          })}</div>
-                          <span className="text-[10px] tabular-nums text-muted-foreground w-16 text-right">今{l.todayKeys}/总{l.totalKeys}</span>
-                        </div>
-                        {expanded && (
-                          <div className="px-3 pb-3 pt-1 border-t space-y-2">
-                            <div className="flex gap-3 flex-wrap items-end">
-                              <div><Label className="text-[10px]">比例(%)</Label><Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={ratio} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(Math.min(100, Math.max(0, parseInt(e.target.value) || 0))) } }) }); fLines(); }} /></div>
-                              <div><Label className="text-[10px]">渠道名</Label><Input className="w-40 h-7 text-xs" value={lCfg.channelName || ""} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, channelName: e.target.value } }) }); fLines(); }} /></div>
-                              <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={lCfg.fixedName === "1"} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, fixedName: e.target.checked ? "1" : "0" } }) }); fLines(); }} className="w-3 h-3" /><span className="text-[10px] text-muted-foreground">固定名称</span></label>
-                              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情 →</Button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </CardContent>
-              </Card>
-            );
-          })}
-
-          {/* Independent pools - each line is a card */}
-          {independentLines.length > 0 && <h3 className="text-sm font-medium text-muted-foreground pt-2">单独线路</h3>}
-          <div className="grid grid-cols-1 gap-3">
-            {independentLines.map(l => {
+          {/* All lines as cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {lines.map(l => {
               const lCfg = l.config || {};
+              const mode = lCfg.importMode || "independent";
+              const isGlobal = mode === "global";
               const expanded = expandedLine === l.id;
+              const rpm = lineRpm[l.id];
+              const groupBatch = parseInt(lCfg.globalGroupBatch) || 10;
+
               return (
-                <Card key={l.id} className={expanded ? "ring-1 ring-primary/30" : ""}>
-                  <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => setExpandedLine(expanded ? null : l.id)}>
+                <Card key={l.id} className={`${expanded ? "ring-1 ring-primary/30 lg:col-span-2" : ""}`}>
+                  {/* Header */}
+                  <div className="flex items-center gap-2 px-4 py-3 cursor-pointer" onClick={() => setExpandedLine(expanded ? null : l.id)}>
                     <div className="flex-1 min-w-0">
-                      <span className="font-medium text-sm">{l.label}</span>
-                      {lCfg.channelName && <span className="text-xs text-muted-foreground ml-1.5">{lCfg.channelName}</span>}
-                      {l.autoEnabled ? <span className="text-[9px] ml-1.5 px-1 rounded bg-green-500/10 text-green-600">自动</span> : null}
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-sm">{l.label}</span>
+                        {isGlobal && <span className="text-[9px] px-1 rounded bg-blue-500/20 text-blue-600">{lCfg.globalGroup}</span>}
+                        {l.autoEnabled ? <span className="text-[9px] px-1 rounded bg-green-500/10 text-green-600">自动</span> : null}
+                      </div>
+                      {lCfg.channelName && <p className="text-[11px] text-muted-foreground truncate">{lCfg.channelName}</p>}
                     </div>
-                    <Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[10px]">{l.activeCount}活跃</Badge>
-                    <div className="flex gap-0.5">{(l.last5 || []).map((rec, i) => {
-                      let color = "bg-green-500"; if (rec.frozen) color = "bg-muted-foreground/30"; else if (rec.allDisabledSince) color = "bg-yellow-500";
-                      return <span key={i} title={`${rec.name}: ${rec.keyCount}个`} className={`inline-block w-4 h-4 rounded text-[8px] text-white flex items-center justify-center ${color}`}>{rec.keyCount}</span>;
-                    })}</div>
-                    <span className="text-[10px] tabular-nums text-muted-foreground">今{l.todayKeys}/总{l.totalKeys}</span>
+                    {rpm && rpm.rpm > 0 && <span className="text-xs font-mono tabular-nums text-amber-600">{rpm.rpm} rpm</span>}
+                    <Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[10px]">{l.activeCount}</Badge>
+                    <div className="text-right text-[10px] tabular-nums text-muted-foreground leading-tight">
+                      <div>今日 <strong className="text-foreground">{l.todayKeys}</strong></div>
+                      <div>总计 <strong className="text-foreground">{l.totalKeys}</strong></div>
+                    </div>
                   </div>
+
+                  {/* Expanded detail */}
                   {expanded && (
-                    <div className="px-4 pb-3 pt-1 border-t space-y-3">
-                      <div className="flex gap-3 flex-wrap items-end">
-                        <div><Label className="text-[10px]">每批数量</Label><Input type="number" className="w-16 h-7 text-xs" value={l.autoBatchSize || 10} onChange={e => { const v = parseInt(e.target.value) || 10; fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: v }) }); fLines(); }} /></div>
-                        <div><Label className="text-[10px]">立即上弹</Label>
-                          <div className="flex gap-1"><Input type="number" className="w-16 h-7 text-xs" id={`qi-${l.id}`} defaultValue={l.autoBatchSize || 10} /><Button size="sm" className="h-7 text-xs px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; doQuickImport(l.id, v); }}>上弹</Button></div>
+                    <div className="px-4 pb-4 border-t space-y-3 pt-3">
+                      {/* RPM bar */}
+                      {rpm && (
+                        <div className="flex gap-4 text-xs">
+                          <span>RPM: <strong className="tabular-nums text-amber-600">{rpm.rpm}</strong></span>
+                          <span>TPM: <strong className="tabular-nums">{(rpm.tpm / 1000).toFixed(0)}k</strong></span>
+                          <span>额度: <strong className="tabular-nums">{fmtQ(rpm.quota)}</strong></span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
-                          <span className="text-[10px] text-muted-foreground">自动上弹</span>
+                      )}
+
+                      {/* Last 5 batches */}
+                      {(l.last5 || []).length > 0 && (
+                        <div>
+                          <p className="text-[10px] text-muted-foreground mb-1">最近5批</p>
+                          <div className="space-y-0.5">
+                            {(l.last5 || []).map((rec, i) => {
+                              let st = "活跃", sc = "text-green-500";
+                              if (rec.frozen) { st = "冻结"; sc = "text-muted-foreground"; }
+                              else if (rec.allDisabledSince) { st = "禁用中"; sc = "text-yellow-500"; }
+                              return (
+                                <div key={i} className="flex items-center gap-2 text-[11px]">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${rec.frozen ? "bg-muted-foreground/30" : rec.allDisabledSince ? "bg-yellow-500" : "bg-green-500"}`} />
+                                  <span className="font-mono truncate flex-1">{rec.name}</span>
+                                  <span className="tabular-nums">{rec.keyCount}个</span>
+                                  <span className="tabular-nums font-mono">{fmtQ(rec.cachedQuota)}</span>
+                                  <span className={`${sc}`}>{st}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
+                      )}
+
+                      {/* Controls */}
+                      <div className="flex gap-3 flex-wrap items-end border-t pt-3">
+                        {isGlobal ? (
+                          <>
+                            <div><Label className="text-[10px]">分组每批</Label><Input type="number" className="w-16 h-7 text-xs" value={groupBatch} onChange={e => { const v = parseInt(e.target.value) || 1; const gLines2 = lines.filter(x => x.config?.globalGroup === lCfg.globalGroup && x.config?.importMode === "global"); for (const x of gLines2) fetch(`/api/lines/${x.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...x.config, globalGroupBatch: String(v) }, autoBatchSize: v }) }); fLines(); }} /></div>
+                            <div><Label className="text-[10px]">比例</Label><Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={parseInt(lCfg.globalRatio) || 100} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(Math.min(100, Math.max(0, parseInt(e.target.value) || 0))) } }) }); fLines(); }} /><span className="text-[10px] text-muted-foreground">%</span></div>
+                            <div className="flex items-center gap-2">
+                              <Switch checked={!!l.autoEnabled} onCheckedChange={v => saveGroupAuto(lCfg.globalGroup || "", v, groupBatch)} />
+                              <span className="text-[10px] text-muted-foreground">自动上弹</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <Input type="number" className="w-14 h-7 text-xs" id={`gq-${l.id}`} defaultValue={groupBatch} />
+                              <Button size="sm" className="h-7 text-xs px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`gq-${l.id}`) as HTMLInputElement)?.value) || 10; doGroupImport(lCfg.globalGroup || "", v); }}>上弹</Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div><Label className="text-[10px]">每批数量</Label><Input type="number" className="w-16 h-7 text-xs" value={l.autoBatchSize || 10} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: parseInt(e.target.value) || 10 }) }); fLines(); }} /></div>
+                            <div className="flex items-center gap-2">
+                              <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
+                              <span className="text-[10px] text-muted-foreground">自动上弹</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <Input type="number" className="w-14 h-7 text-xs" id={`qi-${l.id}`} defaultValue={l.autoBatchSize || 10} />
+                              <Button size="sm" className="h-7 text-xs px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; doQuickImport(l.id, v); }}>上弹</Button>
+                            </div>
+                          </>
+                        )}
                         <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情 →</Button>
                       </div>
                     </div>
@@ -381,9 +390,6 @@ export default function Page() {
                           </SelectContent>
                         </Select>
                       ) : <div className="w-32" />}
-                      {mode === "global" && lCfg.globalGroup === "__new__" && (
-                        <Input className="h-7 w-28 text-xs" placeholder="分组名" onBlur={e => { if (e.target.value.trim()) { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalGroup: e.target.value.trim() } }) }); fLines(); } }} />
-                      )}
                     </div>
                   );
                 })}
