@@ -341,7 +341,28 @@ export default function Page() {
                       )}
 
                       {/* Controls */}
-                      <div className="flex gap-2 flex-wrap items-end border-t pt-2">
+                      {/* Strategy selector */}
+                      <div className="flex items-center gap-2 border-t pt-2">
+                        <span className="text-[10px] text-muted-foreground">投递:</span>
+                        {["default", "overlap", "rotate"].map(s => (
+                          <button key={s} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.importStrategy || "default") === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                            onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, importStrategy: s } }) }); fLines(); }}>
+                            {s === "default" ? "默认" : s === "overlap" ? "重叠" : "换key"}
+                          </button>
+                        ))}
+                        {(lCfg.importStrategy || "default") === "overlap" && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">×</span>
+                            <input className="w-8 h-5 text-[10px] border rounded px-1 text-center" id={`om-${l.id}`} defaultValue={parseInt(lCfg.overlapMultiplier) || 2} />
+                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                              const v = parseInt((document.getElementById(`om-${l.id}`) as HTMLInputElement)?.value) || 2;
+                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, overlapMultiplier: String(v) } }) }); fLines();
+                            }}>存</Button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2 flex-wrap items-end">
                         {isGlobal ? (
                           <>
                             <div className="flex items-center gap-1">
