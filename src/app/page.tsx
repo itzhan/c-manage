@@ -439,7 +439,7 @@ export default function Page() {
               <div className="flex gap-3">
                 <div className="flex-[2]"><Label className="text-xs">API 地址</Label><Input value={cfg.baseUrl || ""} onChange={e => upd("baseUrl", e.target.value)} /></div>
                 <div className="w-[140px]"><Label className="text-xs">平台类型</Label>
-                  <Select value={cfg.platformType || "newapi"} onValueChange={v => v && upd("platformType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newapi">New API</SelectItem><SelectItem value="naci">Naci Hub</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem></SelectContent></Select>
+                  <Select value={cfg.platformType || "newapi"} onValueChange={v => v && upd("platformType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="newapi">New API</SelectItem><SelectItem value="naci">Naci Hub</SelectItem><SelectItem value="sub2api">Sub2API</SelectItem><SelectItem value="keyhub">KeyHub</SelectItem></SelectContent></Select>
                 </div>
                 <div className="w-[140px]"><Label className="text-xs">认证方式</Label>
                   <Select value={cfg.authType || "session"} onValueChange={v => v && upd("authType", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="session">Session Cookie</SelectItem><SelectItem value="token">Access Token</SelectItem></SelectContent></Select>

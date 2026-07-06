@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { keys, lines, records, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, buildSub2apiPayload, buildKeyhubPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
 import { type NextRequest } from "next/server";
 
 function addLog(lineId: number, message: string, level = "info") {
@@ -55,6 +55,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }
       addLog(lineId, `Sub2API 导入完成: 成功${success} 失败${failed}`, success > 0 ? "ok" : "err");
+      ok = success > 0;
+      if (failed > 0 && success === 0) {
+        for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+        addLog(lineId, "全部失败，密钥已退回池中", "warn");
+      }
+    } else if (cfg.platformType === "keyhub") {
+      let success = 0, failed = 0;
+      for (const key of useKeys) {
+        const payload = buildKeyhubPayload(cfg, key);
+        try {
+          const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+          const data = await resp.json();
+          if (resp.ok && !data.error) { success++; }
+          else { failed++; addLog(lineId, `key失败: ${data.error || data.message || resp.statusText}`, "warn"); }
+        } catch (e: unknown) {
+          failed++;
+        }
+      }
+      addLog(lineId, `KeyHub 导入完成: 成功${success} 失败${failed}`, success > 0 ? "ok" : "err");
       ok = success > 0;
       if (failed > 0 && success === 0) {
         for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }

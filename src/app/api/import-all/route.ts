@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { keys, lines, records, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, buildSub2apiPayload, buildKeyhubPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
 
 function addLog(lineId: number, message: string, level = "info") {
   db.insert(logs).values({ lineId, message, level }).run();
@@ -108,7 +108,17 @@ export async function POST(req: Request) {
         addLog(line.id, `[导入] Sub2API: 成功${success}/${lineKeys.length}`, success > 0 ? "ok" : "err");
       }
 
-      if (cfg.platformType !== "sub2api") {
+      if (cfg.platformType === "keyhub") {
+        let success = 0;
+        for (const key of lineKeys) {
+          const p = buildKeyhubPayload(cfg, key);
+          try { const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(p) }); const d = await r.json(); if (r.ok && !d.error) success++; } catch { /* skip */ }
+        }
+        importOk = success > 0;
+        addLog(line.id, `[导入] KeyHub: 成功${success}/${lineKeys.length}`, success > 0 ? "ok" : "err");
+      }
+
+      if (cfg.platformType !== "sub2api" && cfg.platformType !== "keyhub") {
         const lineKeyStr = "\n" + lineKeys.join("\n");
         const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
         const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });

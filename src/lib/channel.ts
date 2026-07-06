@@ -88,10 +88,25 @@ export function buildSub2apiPayload(cfg: Record<string, string>, key: string) {
   };
 }
 
+export function buildKeyhubPayload(cfg: Record<string, string>, key: string) {
+  const models = (cfg.models || "").split(",").map(m => m.trim()).filter(Boolean);
+  return {
+    categoryCode: cfg.keyhubCategoryCode || "anthropic",
+    endpointUrl: "https://api.anthropic.com",
+    rawText: key.trim(),
+    keyType: cfg.keyhubKeyType || "fast",
+    modelScope: cfg.keyhubModelScope || "limited",
+    models,
+    expectedTpm: 0,
+    note: cfg.channelName || "",
+  };
+}
+
 export function getImportEndpoint(cfg: Record<string, string>): string {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
   if (cfg.platformType === "naci") return baseUrl + "/api/admin-hub/channels/";
   if (cfg.platformType === "sub2api") return baseUrl + "/api/user/api-keys";
+  if (cfg.platformType === "keyhub") return baseUrl + "/keyhub/api/keys/import";
   return baseUrl + "/api/channel/";
 }
 
@@ -103,6 +118,8 @@ export function getAuthHeaders(cfg: Record<string, string>): Record<string, stri
   };
   if (cfg.platformType === "sub2api") {
     headers["Authorization"] = cfg.authValue || "";
+  } else if (cfg.platformType === "keyhub") {
+    headers["Cookie"] = cfg.authValue || "";
   } else {
     headers["New-API-User"] = cfg.newApiUser || "3";
     const cookie = getCookie(cfg);

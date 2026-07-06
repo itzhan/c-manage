@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { lines, records, keys, logs } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, buildSub2apiPayload, getImportEndpoint, getAuthHeaders, incrementName, getCookie } from "@/lib/channel";
+import { buildPayload, buildNaciPayload, buildSub2apiPayload, buildKeyhubPayload, getImportEndpoint, getAuthHeaders, incrementName, getCookie } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
 const BILLING_GRACE = 3 * 60;
@@ -62,6 +62,18 @@ async function importToLine(line: any, cfg: Record<string, string>, useKeys: str
       }
       ok = success > 0;
       addLog(line.id, `[自动上弹] Sub2API: 成功${success}/${useKeys.length}`, success > 0 ? "ok" : "err");
+    } else if (cfg.platformType === "keyhub") {
+      let success = 0;
+      for (const key of useKeys) {
+        const payload = buildKeyhubPayload(cfg, key);
+        try {
+          const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+          const data = await resp.json();
+          if (resp.ok && !data.error) success++;
+        } catch { /* skip */ }
+      }
+      ok = success > 0;
+      addLog(line.id, `[自动上弹] KeyHub: 成功${success}/${useKeys.length}`, success > 0 ? "ok" : "err");
     } else {
       const lineKeyStr = "\n" + useKeys.join("\n");
       const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
