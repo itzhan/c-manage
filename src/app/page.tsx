@@ -341,34 +341,49 @@ export default function Page() {
                       )}
 
                       {/* Controls */}
-                      <div className="flex gap-3 flex-wrap items-end border-t pt-3">
+                      <div className="flex gap-2 flex-wrap items-end border-t pt-2">
                         {isGlobal ? (
                           <>
-                            <div><Label className="text-[10px]">分组每批</Label><Input type="number" className="w-16 h-7 text-xs" value={groupBatch} onChange={e => { const v = parseInt(e.target.value) || 1; const gLines2 = lines.filter(x => x.config?.globalGroup === lCfg.globalGroup && x.config?.importMode === "global"); for (const x of gLines2) fetch(`/api/lines/${x.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...x.config, globalGroupBatch: String(v) }, autoBatchSize: v }) }); fLines(); }} /></div>
-                            <div><Label className="text-[10px]">比例</Label><Input type="number" min={0} max={100} className="w-16 h-7 text-xs" value={parseInt(lCfg.globalRatio) || 100} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, globalRatio: String(Math.min(100, Math.max(0, parseInt(e.target.value) || 0))) } }) }); fLines(); }} /><span className="text-[10px] text-muted-foreground">%</span></div>
-                            <div className="flex items-center gap-2">
-                              <Switch checked={!!l.autoEnabled} onCheckedChange={v => saveGroupAuto(lCfg.globalGroup || "", v, groupBatch)} />
-                              <span className="text-[10px] text-muted-foreground">自动上弹</span>
+                            <div className="flex items-center gap-1">
+                              <Label className="text-[10px]">每批</Label>
+                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gb-${l.id}`} defaultValue={groupBatch} />
+                              <Label className="text-[10px]">比例</Label>
+                              <input className="w-10 h-6 text-xs border rounded px-1 text-center" id={`gr-${l.id}`} defaultValue={parseInt(lCfg.globalRatio) || 100} />
+                              <span className="text-[10px] text-muted-foreground">%</span>
+                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
+                                const batch = parseInt((document.getElementById(`gb-${l.id}`) as HTMLInputElement)?.value) || 10;
+                                const ratio = Math.min(100, Math.max(0, parseInt((document.getElementById(`gr-${l.id}`) as HTMLInputElement)?.value) || 100));
+                                const gLines2 = lines.filter(x => x.config?.globalGroup === lCfg.globalGroup && x.config?.importMode === "global");
+                                for (const x of gLines2) fetch(`/api/lines/${x.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...x.config, globalGroupBatch: String(batch), globalRatio: String(ratio) }, autoBatchSize: batch }) });
+                                fLines();
+                              }}>保存</Button>
                             </div>
-                            <div className="flex gap-1">
-                              <Input type="number" className="w-14 h-7 text-xs" id={`gq-${l.id}`} defaultValue={groupBatch} />
-                              <Button size="sm" className="h-7 text-xs px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`gq-${l.id}`) as HTMLInputElement)?.value) || 10; doGroupImport(lCfg.globalGroup || "", v); }}>上弹</Button>
+                            <Switch checked={!!l.autoEnabled} onCheckedChange={v => saveGroupAuto(lCfg.globalGroup || "", v, groupBatch)} />
+                            <span className="text-[10px] text-muted-foreground">自动</span>
+                            <div className="flex gap-1 ml-auto">
+                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gq-${l.id}`} defaultValue={groupBatch} />
+                              <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`gq-${l.id}`) as HTMLInputElement)?.value) || 10; doGroupImport(lCfg.globalGroup || "", v); }}>上弹</Button>
                             </div>
                           </>
                         ) : (
                           <>
-                            <div><Label className="text-[10px]">每批数量</Label><Input type="number" className="w-16 h-7 text-xs" value={l.autoBatchSize || 10} onChange={e => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: parseInt(e.target.value) || 10 }) }); fLines(); }} /></div>
-                            <div className="flex items-center gap-2">
-                              <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
-                              <span className="text-[10px] text-muted-foreground">自动上弹</span>
+                            <div className="flex items-center gap-1">
+                              <Label className="text-[10px]">每批</Label>
+                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`bs-${l.id}`} defaultValue={l.autoBatchSize || 10} />
+                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
+                                const v = parseInt((document.getElementById(`bs-${l.id}`) as HTMLInputElement)?.value) || 10;
+                                fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: v }) }); fLines();
+                              }}>保存</Button>
                             </div>
-                            <div className="flex gap-1">
-                              <Input type="number" className="w-14 h-7 text-xs" id={`qi-${l.id}`} defaultValue={l.autoBatchSize || 10} />
-                              <Button size="sm" className="h-7 text-xs px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; doQuickImport(l.id, v); }}>上弹</Button>
+                            <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
+                            <span className="text-[10px] text-muted-foreground">自动</span>
+                            <div className="flex gap-1 ml-auto">
+                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`qi-${l.id}`} defaultValue={l.autoBatchSize || 10} />
+                              <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; doQuickImport(l.id, v); }}>上弹</Button>
                             </div>
                           </>
                         )}
-                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情 →</Button>
+                        <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情→</Button>
                       </div>
                   </div>
                 </Card>
