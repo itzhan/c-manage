@@ -1,11 +1,7 @@
 import { db } from "@/lib/db";
-import { keys, lines, records, logs } from "@/lib/schema";
+import { keys, lines } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, buildSub2apiPayload, buildKeyhubPayload, getImportEndpoint, getAuthHeaders, incrementName } from "@/lib/channel";
-
-function addLog(lineId: number, message: string, level = "info") {
-  db.insert(logs).values({ lineId, message, level }).run();
-}
+import { addLog, executeImport, saveChannelSlots, createRecordAndAdvanceName } from "@/lib/channel";
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -39,22 +35,17 @@ export async function POST(req: Request) {
     const cfg = JSON.parse(line.config) as Record<string, string>;
     const lineMode = cfg.importMode || "independent";
 
-    // Determine if this line should participate
     if (mode === "global") {
-      // Global dispatch: only global-mode lines
       if (lineMode !== "global") continue;
     } else if (mode === "independent") {
-      // Single-line import (called from line detail)
       if (line.id !== parseInt(String(lineRatios?.targetLineId || "0"))) continue;
     } else {
-      // Legacy: respect importDisabled
       if (cfg.importDisabled === "1") {
         results.push({ lineId: line.id, label: line.label, success: false, error: "已禁用", keyCount: 0 });
         continue;
       }
     }
 
-    // Check ratio from request params, then fall back to config
     const ratio = lineRatios?.[String(line.id)];
     if (ratio === 0) {
       results.push({ lineId: line.id, label: line.label, success: false, error: "已跳过", keyCount: 0 });
@@ -70,7 +61,6 @@ export async function POST(req: Request) {
       continue;
     }
 
-    // Determine how many keys this line gets
     let lineKeys: string[];
     if (ratio !== undefined && ratio < 100) {
       const n = Math.round(useKeys.length * ratio / 100);
@@ -90,55 +80,14 @@ export async function POST(req: Request) {
       continue;
     }
 
-    addLog(line.id, `[导入] 导入 ${lineKeys.length} 个密钥 → 「${name || baseUrl}」`, "info");
-
-    const endpoint = getImportEndpoint(cfg);
-    const headers = getAuthHeaders(cfg);
+    const strategy = cfg.importStrategy || "default";
+    addLog(line.id, `[导入] 导入密钥 → 「${name || baseUrl}」 (${strategy})`, "info");
 
     try {
-      let importOk = false;
-
-      if (cfg.platformType === "sub2api") {
-        let success = 0;
-        for (const key of lineKeys) {
-          const p = buildSub2apiPayload(cfg, key);
-          try { const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(p) }); const d = await r.json(); if (r.ok && !d.error) success++; } catch { /* skip */ }
-        }
-        importOk = success > 0;
-        addLog(line.id, `[导入] Sub2API: 成功${success}/${lineKeys.length}`, success > 0 ? "ok" : "err");
-      }
-
-      if (cfg.platformType === "keyhub") {
-        let success = 0;
-        for (const key of lineKeys) {
-          const p = buildKeyhubPayload(cfg, key);
-          try { const r = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(p) }); const d = await r.json(); if (r.ok && !d.error) success++; } catch { /* skip */ }
-        }
-        importOk = success > 0;
-        addLog(line.id, `[导入] KeyHub: 成功${success}/${lineKeys.length}`, success > 0 ? "ok" : "err");
-      }
-
-      if (cfg.platformType !== "sub2api" && cfg.platformType !== "keyhub") {
-        const lineKeyStr = "\n" + lineKeys.join("\n");
-        const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
-        const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-        const data = await resp.json();
-        if (resp.ok && data.success !== false) {
-          addLog(line.id, `[导入] 成功！`, "ok");
-          importOk = true;
-        } else {
-          addLog(line.id, `[导入] 失败: ${data.message || ""}`, "err");
-        }
-      }
-
-      if (importOk) {
-        db.insert(records).values({ lineId: line.id, name: name || baseUrl, keyCount: lineKeys.length }).run();
-        if (cfg.fixedName !== "1" && name) {
-          const nextName = incrementName(name);
-          cfg.channelName = nextName;
-          db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-          addLog(line.id, `[导入] 名称递增 → ${nextName}`, "info");
-        }
+      const result = await executeImport(cfg, lineKeys, line.id);
+      if (result.ok) {
+        saveChannelSlots(line.id, result.channelIds, name);
+        createRecordAndAdvanceName(line.id, cfg, lineKeys, strategy);
         results.push({ lineId: line.id, label: line.label, success: true, name: name || baseUrl, keyCount: lineKeys.length });
         anySuccess = true;
       } else {

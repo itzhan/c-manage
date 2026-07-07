@@ -1,3 +1,11 @@
+import { db } from "@/lib/db";
+import { logs, records, lines } from "@/lib/schema";
+import { eq } from "drizzle-orm";
+
+export function addLog(lineId: number, message: string, level = "info") {
+  db.insert(logs).values({ lineId, message, level }).run();
+}
+
 export function incrementName(name: string): string {
   const m = name.match(/^(.*?)(\d+)$/);
   if (!m) return name + "0001";
@@ -102,11 +110,25 @@ export function buildKeyhubPayload(cfg: Record<string, string>, key: string) {
   };
 }
 
+export function buildZhongzhuanPayload(cfg: Record<string, string>, keys: string[]) {
+  const models = (cfg.models || "").split(",").map(m => m.trim()).filter(Boolean);
+  return {
+    category: cfg.zhongzhuanCategory || "anthropic",
+    items: keys.map(k => ({ key: k.trim(), base_url: "", remark: "", proxy: "" })),
+    models,
+    tag: cfg.tag || cfg.channelName || "",
+    remark: "",
+    proxy: "",
+    standby: false,
+  };
+}
+
 export function getImportEndpoint(cfg: Record<string, string>): string {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
   if (cfg.platformType === "naci") return baseUrl + "/api/admin-hub/channels/";
   if (cfg.platformType === "sub2api") return baseUrl + "/api/user/api-keys";
   if (cfg.platformType === "keyhub") return baseUrl + "/keyhub/api/keys/import";
+  if (cfg.platformType === "zhongzhuan") return baseUrl + "/api/channels/batch";
   return baseUrl + "/api/channel/";
 }
 
@@ -120,6 +142,8 @@ export function getAuthHeaders(cfg: Record<string, string>): Record<string, stri
     headers["Authorization"] = cfg.authValue || "";
   } else if (cfg.platformType === "keyhub") {
     headers["Cookie"] = cfg.authValue || "";
+  } else if (cfg.platformType === "zhongzhuan") {
+    headers["Authorization"] = `Bearer ${cfg.authValue || ""}`;
   } else {
     headers["New-API-User"] = cfg.newApiUser || "3";
     const cookie = getCookie(cfg);
@@ -149,4 +173,145 @@ export function getCookie(cfg: Record<string, string>): string {
     return v.startsWith("session=") ? v : "session=" + v;
   }
   return "";
+}
+
+async function importBatch(cfg: Record<string, string>, headers: Record<string, string>, endpoint: string, keyStr: string, importKeys: string[], lineId: number): Promise<{ ok: boolean; channelIds: number[] }> {
+  const channelIds: number[] = [];
+
+  if (cfg.platformType === "sub2api") {
+    let success = 0;
+    for (const key of importKeys) {
+      try {
+        const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(buildSub2apiPayload(cfg, key)) });
+        const data = await resp.json();
+        if (resp.ok && !data.error) success++;
+      } catch { /* skip */ }
+    }
+    return { ok: success > 0, channelIds };
+  }
+
+  if (cfg.platformType === "keyhub") {
+    let success = 0;
+    for (const key of importKeys) {
+      try {
+        const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(buildKeyhubPayload(cfg, key)) });
+        const data = await resp.json();
+        if (resp.ok && !data.error) success++;
+      } catch { /* skip */ }
+    }
+    return { ok: success > 0, channelIds };
+  }
+
+  if (cfg.platformType === "zhongzhuan") {
+    const payload = buildZhongzhuanPayload(cfg, importKeys);
+    try {
+      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+      const text = await resp.text();
+      addLog(lineId, `[中转站] ${resp.status} ${text.substring(0, 200)}`, resp.ok ? "info" : "err");
+      const data = JSON.parse(text);
+      if (resp.ok && data.success !== false) {
+        const results = data.data?.results || [];
+        for (const r of results) { if (r.channel_id) channelIds.push(r.channel_id); }
+        return { ok: (data.data?.success || 0) > 0, channelIds };
+      }
+    } catch (e: unknown) {
+      addLog(lineId, `[中转站] 请求异常: ${e instanceof Error ? e.message : String(e)}`, "err");
+    }
+    return { ok: false, channelIds };
+  }
+
+  // New API / Naci
+  const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, keyStr) : buildPayload(cfg, keyStr);
+  const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+  const data = await resp.json();
+
+  if (resp.ok && data.success !== false) {
+    if (data.data?.channel?.id) channelIds.push(data.data.channel.id);
+    if (data.data?.channels) {
+      for (const ch of data.data.channels) { if (ch.id) channelIds.push(ch.id); }
+    }
+    return { ok: true, channelIds };
+  }
+  return { ok: false, channelIds };
+}
+
+async function rotateKeys(cfg: Record<string, string>, headers: Record<string, string>, useKeys: string[], lineId: number): Promise<boolean> {
+  const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+  const slots = (db as any).prepare("SELECT * FROM channel_slots WHERE line_id = ? AND status = 'active' ORDER BY id").all(lineId) as any[];
+
+  if (slots.length === 0) {
+    addLog(lineId, "[换key] 无固定渠道，请先用默认模式创建", "warn");
+    return false;
+  }
+
+  const keyStr = "\n" + useKeys.join("\n");
+  let success = 0;
+
+  for (const slot of slots) {
+    try {
+      const resp = await fetch(`${baseUrl}/api/channel/`, {
+        method: "PUT", headers,
+        body: JSON.stringify({ id: slot.remote_channel_id, key: keyStr, status: 1 }),
+      });
+      if (resp.ok) {
+        success++;
+        addLog(lineId, `[换key] 渠道 ${slot.name} (${slot.remote_channel_id}) 已更新`, "ok");
+        await fetch(`${baseUrl}/api/channel/`, {
+          method: "PUT", headers,
+          body: JSON.stringify({ id: slot.remote_channel_id, status: 1 }),
+        });
+      } else {
+        addLog(lineId, `[换key] 渠道 ${slot.remote_channel_id} 更新失败: ${resp.statusText}`, "err");
+      }
+    } catch {
+      addLog(lineId, `[换key] 渠道 ${slot.remote_channel_id} 请求失败`, "err");
+    }
+  }
+
+  addLog(lineId, `[换key] 完成: ${success}/${slots.length} 渠道已更新`, success > 0 ? "ok" : "err");
+  return success > 0;
+}
+
+export async function executeImport(cfg: Record<string, string>, useKeys: string[], lineId: number): Promise<{ ok: boolean; channelIds: number[] }> {
+  const strategy = cfg.importStrategy || "default";
+  const endpoint = getImportEndpoint(cfg);
+  const headers = getAuthHeaders(cfg);
+
+  if (strategy === "rotate") {
+    const ok = await rotateKeys(cfg, headers, useKeys, lineId);
+    return { ok, channelIds: [] };
+  }
+
+  let importKeys = useKeys;
+  if (strategy === "overlap") {
+    const multiplier = parseInt(cfg.overlapMultiplier) || 2;
+    importKeys = [];
+    for (let m = 0; m < multiplier; m++) importKeys.push(...useKeys);
+    addLog(lineId, `[重叠] ${useKeys.length} key × ${multiplier} = ${importKeys.length} 渠道`, "info");
+  }
+
+  const keyStr = "\n" + importKeys.join("\n");
+  return importBatch(cfg, headers, endpoint, keyStr, importKeys, lineId);
+}
+
+export function saveChannelSlots(lineId: number, channelIds: number[], name: string) {
+  if (channelIds.length === 0) return;
+  try {
+    const insertSlot = (db as any).prepare("INSERT INTO channel_slots (line_id, remote_channel_id, name, created_at) VALUES (?, ?, ?, unixepoch())");
+    for (const cid of channelIds) insertSlot.run(lineId, cid, name);
+    addLog(lineId, `[记录] 保存 ${channelIds.length} 个渠道ID`, "info");
+  } catch { /* channel_slots table issue */ }
+}
+
+export function createRecordAndAdvanceName(lineId: number, cfg: Record<string, string>, useKeys: string[], strategy: string): string {
+  const name = cfg.channelName || cfg.baseUrl || "";
+  db.insert(records).values({ lineId, name, keyCount: useKeys.length }).run();
+  if (strategy !== "rotate" && cfg.fixedName !== "1" && cfg.channelName) {
+    const nextName = incrementName(cfg.channelName);
+    cfg.channelName = nextName;
+    db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, lineId)).run();
+    addLog(lineId, `名称递增 → ${nextName}`, "info");
+    return nextName;
+  }
+  return name;
 }

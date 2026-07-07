@@ -1,14 +1,11 @@
 import { db } from "@/lib/db";
-import { lines, records, keys, logs } from "@/lib/schema";
+import { lines, records, keys, dispatchLocks } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { buildPayload, buildNaciPayload, buildSub2apiPayload, buildKeyhubPayload, getImportEndpoint, getAuthHeaders, incrementName, getCookie } from "@/lib/channel";
+import { addLog, executeImport, saveChannelSlots, createRecordAndAdvanceName, getCookie } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
 const BILLING_GRACE = 3 * 60;
-
-function addLog(lineId: number, message: string, level = "info") {
-  db.insert(logs).values({ lineId, message, level }).run();
-}
+const LOCK_TTL = 60;
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -17,6 +14,22 @@ function shuffle<T>(arr: T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+function acquireLock(key: string): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const existing = db.select().from(dispatchLocks).where(eq(dispatchLocks.lockKey, key)).get();
+  if (existing && now - existing.lockedAt < LOCK_TTL) return false;
+  if (existing) {
+    db.update(dispatchLocks).set({ lockedAt: now }).where(eq(dispatchLocks.lockKey, key)).run();
+  } else {
+    db.insert(dispatchLocks).values({ lockKey: key, lockedAt: now }).run();
+  }
+  return true;
+}
+
+function releaseLock(key: string) {
+  db.delete(dispatchLocks).where(eq(dispatchLocks.lockKey, key)).run();
 }
 
 async function fetchChannels(cfg: Record<string, string>, name: string) {
@@ -40,125 +53,102 @@ async function fetchChannels(cfg: Record<string, string>, name: string) {
   return null;
 }
 
-async function importToLine(line: any, cfg: Record<string, string>, useKeys: string[]) {
-  const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
-  const name = cfg.channelName || "";
-  if (!baseUrl || !cfg.authValue || !name) return false;
+function checkTrigger(rec: { keyCount: number; disabledCount: number; cachedQuota: number }, cfg: Record<string, string>): boolean {
+  const mode = cfg.triggerMode || "dead_ratio";
+  if (rec.keyCount <= 0) return false;
 
-  const endpoint = getImportEndpoint(cfg);
-  const headers = getAuthHeaders(cfg);
-
-  try {
-    let ok = false;
-    if (cfg.platformType === "sub2api") {
-      let success = 0;
-      for (const key of useKeys) {
-        const payload = buildSub2apiPayload(cfg, key);
-        try {
-          const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-          const data = await resp.json();
-          if (resp.ok && !data.error) success++;
-        } catch { /* skip */ }
-      }
-      ok = success > 0;
-      addLog(line.id, `[自动上弹] Sub2API: 成功${success}/${useKeys.length}`, success > 0 ? "ok" : "err");
-    } else if (cfg.platformType === "keyhub") {
-      let success = 0;
-      for (const key of useKeys) {
-        const payload = buildKeyhubPayload(cfg, key);
-        try {
-          const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-          const data = await resp.json();
-          if (resp.ok && !data.error) success++;
-        } catch { /* skip */ }
-      }
-      ok = success > 0;
-      addLog(line.id, `[自动上弹] KeyHub: 成功${success}/${useKeys.length}`, success > 0 ? "ok" : "err");
-    } else {
-      const lineKeyStr = "\n" + useKeys.join("\n");
-      const payload = cfg.platformType === "naci" ? buildNaciPayload(cfg, lineKeyStr) : buildPayload(cfg, lineKeyStr);
-      const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-      const data = await resp.json();
-      if (resp.ok && data.success !== false) {
-        addLog(line.id, `[自动上弹] 成功！导入 ${useKeys.length} 个密钥 → 渠道「${name}」`, "ok");
-        ok = true;
-      } else {
-        addLog(line.id, `[自动上弹] 失败: ${data.message || ""}`, "err");
-      }
-    }
-
-    if (ok) {
-      db.insert(records).values({ lineId: line.id, name: name || cfg.baseUrl, keyCount: useKeys.length }).run();
-      if (cfg.fixedName !== "1" && name) {
-        const nextName = incrementName(name);
-        cfg.channelName = nextName;
-        db.update(lines).set({ config: JSON.stringify(cfg) }).where(eq(lines.id, line.id)).run();
-        addLog(line.id, `[自动上弹] 名称递增 → ${nextName}`, "info");
-      }
-      return true;
-    }
-  } catch (e: unknown) {
-    addLog(line.id, `[自动上弹] 请求失败: ${e instanceof Error ? e.message : String(e)}`, "err");
+  if (mode === "dead_ratio") {
+    const threshold = parseFloat(cfg.triggerDeadRatio) || 0.67;
+    return rec.disabledCount / rec.keyCount >= threshold;
+  }
+  if (mode === "quota_total") {
+    const threshold = parseInt(cfg.triggerQuotaTotal) || 0;
+    return threshold > 0 && rec.cachedQuota >= threshold;
+  }
+  if (mode === "quota_avg") {
+    const threshold = parseInt(cfg.triggerQuotaAvg) || 0;
+    return threshold > 0 && rec.cachedQuota / rec.keyCount >= threshold;
   }
   return false;
 }
 
-// Independent line auto-import: only imports to this single line
-async function autoImportIndependent(line: any, batchSize: number) {
+async function doImportForLine(line: any, cfg: Record<string, string>, batchSize: number, logPrefix: string) {
   const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(batchSize).all();
-  if (!poolKeys.length) return;
+  if (!poolKeys.length) {
+    addLog(line.id, `${logPrefix} 密钥池为空，跳过`, "warn");
+    return false;
+  }
   const useKeys = poolKeys.map(k => k.key);
   for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
 
-  const cfg = JSON.parse(line.config) as Record<string, string>;
-  addLog(line.id, `[自动上弹-单独] 导入 ${useKeys.length} 个密钥`, "info");
-  const ok = await importToLine(line, cfg, useKeys);
-  if (!ok) {
-    for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
-    addLog(line.id, `[自动上弹-单独] 失败，密钥已退回池中`, "warn");
+  const strategy = cfg.importStrategy || "default";
+  addLog(line.id, `${logPrefix} 导入 ${useKeys.length} 个密钥 (${strategy})`, "info");
+
+  const result = await executeImport(cfg, useKeys, line.id);
+  if (result.ok) {
+    saveChannelSlots(line.id, result.channelIds, cfg.channelName || "");
+    createRecordAndAdvanceName(line.id, cfg, useKeys, strategy);
+    addLog(line.id, `${logPrefix} 成功！`, "ok");
+    return true;
   }
+
+  for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+  addLog(line.id, `${logPrefix} 失败，密钥已退回池中`, "warn");
+  return false;
 }
 
-// Global auto-import: per group, take groupBatchSize keys and distribute by ratio
-async function autoImportGlobal() {
-  const globalLines = db.select().from(lines).all().filter(l => {
-    const c = JSON.parse(l.config);
-    return c.importMode === "global";
-  });
-
-  // Group lines
-  const groups = new Map<string, any[]>();
-  for (const line of globalLines) {
-    const cfg = JSON.parse(line.config);
-    const g = cfg.globalGroup || "默认";
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g)!.push(line);
-  }
-
-  for (const [group, gLines] of groups) {
-    const firstCfg = JSON.parse(gLines[0].config);
-    const groupBatch = parseInt(firstCfg.globalGroupBatch) || 10;
-
-    const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(groupBatch).all();
-    if (!poolKeys.length) continue;
-    const useKeys = poolKeys.map(k => k.key);
-    for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
-
-    let anySuccess = false;
+async function autoImportGlobal(groupLines: Map<string, any[]>, allCfgs: Map<number, Record<string, string>>) {
+  for (const [group, gLines] of groupLines) {
+    let totalChannels = 0, totalDisabled = 0, totalQuota = 0;
     for (const line of gLines) {
-      const cfg = JSON.parse(line.config) as Record<string, string>;
-      const ratio = parseInt(cfg.globalRatio) || 100;
-      if (ratio <= 0) continue;
-      const n = Math.round(useKeys.length * ratio / 100);
-      const lineKeys = ratio >= 100 ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
-
-      addLog(line.id, `[自动上弹-全局/${group}] 导入 ${lineKeys.length} 个密钥 (${ratio}%)`, "info");
-      if (await importToLine(line, cfg, lineKeys)) anySuccess = true;
+      const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
+      const latest = unfrozen[unfrozen.length - 1];
+      if (latest) {
+        totalChannels += latest.keyCount;
+        totalDisabled += latest.disabledCount;
+        totalQuota += latest.cachedQuota;
+      }
     }
 
-    if (!anySuccess) {
-      for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
-      for (const line of gLines) addLog(line.id, `[自动上弹-全局/${group}] 所有线路均失败，密钥已退回池中`, "warn");
+    if (totalChannels <= 0) continue;
+
+    const firstCfg = allCfgs.get(gLines[0].id) || {};
+    if (!checkTrigger({ keyCount: totalChannels, disabledCount: totalDisabled, cachedQuota: totalQuota }, firstCfg)) continue;
+
+    const lockKey = `group:${group}`;
+    if (!acquireLock(lockKey)) continue;
+
+    try {
+      const groupBatch = parseInt(firstCfg.globalGroupBatch) || 10;
+      const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(groupBatch).all();
+      if (!poolKeys.length) { releaseLock(lockKey); continue; }
+      const useKeys = poolKeys.map(k => k.key);
+      for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
+
+      let anySuccess = false;
+      for (const line of gLines) {
+        const cfg = allCfgs.get(line.id) || {};
+        const ratio = parseInt(cfg.globalRatio as string) || 100;
+        if (ratio <= 0) continue;
+        const n = Math.round(useKeys.length * ratio / 100);
+        const lineKeys = ratio >= 100 ? useKeys : shuffle(useKeys).slice(0, Math.max(1, n));
+
+        const strategy = cfg.importStrategy || "default";
+        addLog(line.id, `[自动上弹-全局/${group}] 导入 ${lineKeys.length} 个密钥 (${strategy}, ${ratio}%)`, "info");
+        const result = await executeImport(cfg as Record<string, string>, lineKeys, line.id);
+        if (result.ok) {
+          saveChannelSlots(line.id, result.channelIds, cfg.channelName || "");
+          createRecordAndAdvanceName(line.id, cfg as Record<string, string>, lineKeys, strategy);
+          anySuccess = true;
+        }
+      }
+
+      if (!anySuccess) {
+        for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+        for (const line of gLines) addLog(line.id, `[自动上弹-全局/${group}] 所有线路均失败，密钥已退回池中`, "warn");
+      }
+    } finally {
+      releaseLock(lockKey);
     }
   }
 }
@@ -169,15 +159,17 @@ export async function POST() {
   let updated = 0;
   let cooldown = false;
 
-  let needGlobalImport = false;
+  const globalGroupLines = new Map<string, any[]>();
+  const allCfgs = new Map<number, Record<string, string>>();
 
   for (const line of allLines) {
     const cfg = JSON.parse(line.config);
+    allCfgs.set(line.id, cfg);
     const isGlobal = cfg.importMode === "global";
     const recs = db.select().from(records).where(eq(records.lineId, line.id)).all();
 
+    // Phase 1: Monitor all non-frozen records
     for (const r of recs) {
-      // Frozen records: still query billing for 3 min grace period
       if (r.frozen) {
         const frozenAt = r.allDisabledSince ? r.allDisabledSince + FREEZE_AFTER : 0;
         if (frozenAt && now - frozenAt < BILLING_GRACE) {
@@ -193,8 +185,9 @@ export async function POST() {
       const channels = await fetchChannels(cfg, r.name);
       if (!channels) continue;
       const totalQuota = channels.reduce((s, ch) => s + (ch.used_quota || 0), 0);
-      const allDisabled = channels.length > 0 && channels.every(ch => ch.status === 3);
-      const upd: Record<string, unknown> = { cachedQuota: totalQuota, keyCount: channels.length, lastRefresh: now };
+      const disabledCount = channels.filter(ch => ch.status === 3).length;
+      const allDisabled = channels.length > 0 && disabledCount === channels.length;
+      const upd: Record<string, unknown> = { cachedQuota: totalQuota, keyCount: channels.length, disabledCount, lastRefresh: now };
       if (allDisabled) {
         if (!r.allDisabledSince) upd.allDisabledSince = now;
         else if (now - r.allDisabledSince >= FREEZE_AFTER) upd.frozen = 1;
@@ -205,25 +198,33 @@ export async function POST() {
       updated++;
     }
 
-    // Auto-import: trigger immediately when latest batch is all disabled (don't wait for freeze)
+    // Phase 2: Trigger check — only on the latest non-frozen record
     if (line.autoEnabled) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
-      const latest = unfrozen.length > 0 ? unfrozen[unfrozen.length - 1] : null;
-      if (latest?.allDisabledSince) {
-        db.update(records).set({ frozen: 1 }).where(eq(records.id, latest.id)).run();
+      const latest = unfrozen[unfrozen.length - 1];
 
+      if (latest && latest.keyCount > 0 && checkTrigger(latest, cfg)) {
         if (isGlobal) {
-          needGlobalImport = true;
+          const g = cfg.globalGroup || "默认";
+          if (!globalGroupLines.has(g)) globalGroupLines.set(g, []);
+          globalGroupLines.get(g)!.push(line);
         } else {
-          await autoImportIndependent(line, line.autoBatchSize || 10);
-          cooldown = true;
+          const lockKey = `line:${line.id}`;
+          if (acquireLock(lockKey)) {
+            try {
+              await doImportForLine(line, cfg, line.autoBatchSize || 10, "[自动上弹-单独]");
+              cooldown = true;
+            } finally {
+              releaseLock(lockKey);
+            }
+          }
         }
       }
     }
   }
 
-  if (needGlobalImport) {
-    await autoImportGlobal();
+  if (globalGroupLines.size > 0) {
+    await autoImportGlobal(globalGroupLines, allCfgs);
     cooldown = true;
   }
 

@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
-type Rec = { id: number; lineId: number; name: string; keyCount: number; cachedQuota: number; allDisabledSince: number | null; frozen: number; lastRefresh: number | null; importedAt: number };
+type Rec = { id: number; lineId: number; name: string; keyCount: number; cachedQuota: number; allDisabledSince: number | null; frozen: number; disabledCount: number; lastRefresh: number | null; importedAt: number };
 type Line = { id: number; label: string; config: Record<string, string>; autoEnabled: number; autoBatchSize: number; activeCount: number; recordCount: number; last5: Rec[]; totalKeys: number; todayKeys: number };
 type LogEntry = { id: number; message: string; level: string; createdAt: number };
 
@@ -326,9 +326,10 @@ export default function Page() {
                               let st = "活跃", sc = "text-green-500";
                               if (rec.frozen) { st = "冻结"; sc = "text-muted-foreground"; }
                               else if (rec.allDisabledSince) { st = "禁用中"; sc = "text-yellow-500"; }
+                              else if (rec.disabledCount > 0) { st = `${rec.disabledCount}/${rec.keyCount}死`; sc = "text-orange-500"; }
                               return (
                                 <div key={i} className="flex items-center gap-2 text-[11px]">
-                                  <span className={`w-1.5 h-1.5 rounded-full ${rec.frozen ? "bg-muted-foreground/30" : rec.allDisabledSince ? "bg-yellow-500" : "bg-green-500"}`} />
+                                  <span className={`w-1.5 h-1.5 rounded-full ${rec.frozen ? "bg-muted-foreground/30" : rec.allDisabledSince ? "bg-yellow-500" : rec.disabledCount > 0 ? "bg-orange-500" : "bg-green-500"}`} />
                                   <span className="font-mono truncate flex-1">{rec.name}</span>
                                   <span className="tabular-nums">{rec.keyCount}个</span>
                                   <span className="tabular-nums font-mono">{fmtQ(rec.cachedQuota)}</span>
@@ -357,6 +358,48 @@ export default function Page() {
                             <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
                               const v = parseInt((document.getElementById(`om-${l.id}`) as HTMLInputElement)?.value) || 2;
                               fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, overlapMultiplier: String(v) } }) }); fLines();
+                            }}>存</Button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Trigger settings */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">触发:</span>
+                        {(["dead_ratio", "quota_total", "quota_avg"] as const).map(m => (
+                          <button key={m} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.triggerMode || "dead_ratio") === m ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                            onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerMode: m } }) }); fLines(); }}>
+                            {m === "dead_ratio" ? "死亡比例" : m === "quota_total" ? "总额度" : "平均额度"}
+                          </button>
+                        ))}
+                        {(lCfg.triggerMode || "dead_ratio") === "dead_ratio" && (
+                          <div className="flex items-center gap-1">
+                            <input className="w-10 h-5 text-[10px] border rounded px-1 text-center" id={`tdr-${l.id}`} defaultValue={Math.round((parseFloat(lCfg.triggerDeadRatio) || 0.67) * 100)} />
+                            <span className="text-[10px] text-muted-foreground">%</span>
+                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                              const v = Math.min(100, Math.max(1, parseInt((document.getElementById(`tdr-${l.id}`) as HTMLInputElement)?.value) || 67));
+                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerDeadRatio: String(v / 100) } }) }); fLines();
+                            }}>存</Button>
+                          </div>
+                        )}
+                        {(lCfg.triggerMode || "dead_ratio") === "quota_total" && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">≥$</span>
+                            <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqt-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaTotal) || 0) / 500000).toFixed(0)} />
+                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                              const v = parseFloat((document.getElementById(`tqt-${l.id}`) as HTMLInputElement)?.value) || 0;
+                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaTotal: String(Math.round(v * 500000)) } }) }); fLines();
+                            }}>存</Button>
+                          </div>
+                        )}
+                        {(lCfg.triggerMode || "dead_ratio") === "quota_avg" && (
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground">≥$</span>
+                            <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqa-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaAvg) || 0) / 500000).toFixed(0)} />
+                            <span className="text-[10px] text-muted-foreground">/key</span>
+                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                              const v = parseFloat((document.getElementById(`tqa-${l.id}`) as HTMLInputElement)?.value) || 0;
+                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaAvg: String(Math.round(v * 500000)) } }) }); fLines();
                             }}>存</Button>
                           </div>
                         )}
@@ -487,12 +530,14 @@ export default function Page() {
             </CardHeader>
             <CardContent>
               {recs.length === 0 ? <p className="text-center text-muted-foreground text-sm py-6">暂无记录</p> : (<>
-                <Table><TableHeader><TableRow><TableHead>渠道名称</TableHead><TableHead>密钥数</TableHead><TableHead>状态</TableHead><TableHead>总消耗</TableHead><TableHead>刷新</TableHead><TableHead className="w-8" /></TableRow></TableHeader>
+                <Table><TableHeader><TableRow><TableHead>渠道名称</TableHead><TableHead>密钥数</TableHead><TableHead>禁用</TableHead><TableHead>状态</TableHead><TableHead>总消耗</TableHead><TableHead>刷新</TableHead><TableHead className="w-8" /></TableRow></TableHeader>
                 <TableBody>{recs.map(r => {
                   let st = "活跃", sc = "text-green-500";
                   if (r.frozen) { st = "冻结"; sc = "text-muted-foreground"; }
                   else if (r.allDisabledSince) { st = `禁用(${Math.max(0, FREEZE_AFTER - (now - r.allDisabledSince))}s)`; sc = "text-yellow-500"; }
-                  return (<TableRow key={r.id}><TableCell className="font-medium">{r.name}</TableCell><TableCell className="font-mono text-xs">{r.keyCount}</TableCell><TableCell className={`text-xs ${sc}`}>{st}</TableCell><TableCell className="font-mono font-semibold text-xs">{fmtQ(r.cachedQuota)}</TableCell><TableCell className="font-mono text-xs text-muted-foreground">{fmtT(r.lastRefresh)}</TableCell><TableCell><button className="text-muted-foreground hover:text-destructive text-xs" onClick={() => delRec(r.id)}>&#10005;</button></TableCell></TableRow>);
+                  else if (r.disabledCount > 0) { st = "部分禁用"; sc = "text-orange-500"; }
+                  const deadPct = r.keyCount > 0 ? Math.round(r.disabledCount / r.keyCount * 100) : 0;
+                  return (<TableRow key={r.id}><TableCell className="font-medium">{r.name}</TableCell><TableCell className="font-mono text-xs">{r.keyCount}</TableCell><TableCell className={`font-mono text-xs ${deadPct >= 67 ? "text-red-500 font-semibold" : deadPct > 0 ? "text-orange-500" : "text-muted-foreground"}`}>{r.disabledCount}/{r.keyCount} ({deadPct}%)</TableCell><TableCell className={`text-xs ${sc}`}>{st}</TableCell><TableCell className="font-mono font-semibold text-xs">{fmtQ(r.cachedQuota)}</TableCell><TableCell className="font-mono text-xs text-muted-foreground">{fmtT(r.lastRefresh)}</TableCell><TableCell><button className="text-muted-foreground hover:text-destructive text-xs" onClick={() => delRec(r.id)}>&#10005;</button></TableCell></TableRow>);
                 })}</TableBody></Table>
                 <div className="flex justify-end pt-2 text-sm font-semibold"><span className="text-muted-foreground mr-2">{recTotal} 组 · {recKeys} 密钥 ·</span><span className="font-mono">{fmtQ(recQuota)}</span></div>
                 {totalPg > 1 && <div className="flex items-center justify-center gap-2 pt-2">
@@ -588,13 +633,44 @@ export default function Page() {
           {isIndependent && (<>
             <Card>
               <CardHeader className="pb-3"><CardTitle className="text-sm">自动上弹</CardTitle></CardHeader>
-              <CardContent>
+              <CardContent className="space-y-3">
                 <div className="flex items-center gap-3">
                   <Switch checked={autoOn} onCheckedChange={v => saveAuto(v, autoBatch)} />
-                  <span className="text-sm text-muted-foreground">批次全禁用时自动导入</span>
+                  <span className="text-sm text-muted-foreground">达到触发条件时自动导入</span>
                   <span className={`text-xs ml-auto ${autoOn && poolN > 0 ? "text-green-500" : "text-muted-foreground"}`}>{!autoOn ? "未启用" : poolN === 0 ? "池空" : `每批${autoBatch}`}</span>
                 </div>
-                <div className="flex items-center gap-3 mt-3"><Label className="text-xs w-20">每批数量</Label><Input type="number" className="w-[120px]" value={autoBatch} onChange={e => saveAuto(autoOn, parseInt(e.target.value) || 10)} /></div>
+                <div className="flex items-center gap-3"><Label className="text-xs w-20">每批数量</Label><Input type="number" className="w-[120px]" value={autoBatch} onChange={e => saveAuto(autoOn, parseInt(e.target.value) || 10)} /></div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Label className="text-xs w-20">触发模式</Label>
+                  <Select value={cfg.triggerMode || "dead_ratio"} onValueChange={v => v && upd("triggerMode", v)}>
+                    <SelectTrigger className="w-[140px] h-8"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="dead_ratio">死亡比例</SelectItem>
+                      <SelectItem value="quota_total">总消耗额度</SelectItem>
+                      <SelectItem value="quota_avg">每key平均额度</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {(cfg.triggerMode || "dead_ratio") === "dead_ratio" && (
+                    <div className="flex items-center gap-1">
+                      <Label className="text-xs">阈值</Label>
+                      <Input type="number" className="w-[80px] h-8" value={Math.round((parseFloat(cfg.triggerDeadRatio) || 0.67) * 100)} onChange={e => upd("triggerDeadRatio", String(Math.min(100, Math.max(1, parseInt(e.target.value) || 67)) / 100))} />
+                      <span className="text-xs text-muted-foreground">%</span>
+                    </div>
+                  )}
+                  {(cfg.triggerMode || "dead_ratio") === "quota_total" && (
+                    <div className="flex items-center gap-1">
+                      <Label className="text-xs">≥$</Label>
+                      <Input type="number" className="w-[100px] h-8" value={((parseInt(cfg.triggerQuotaTotal) || 0) / 500000).toFixed(0)} onChange={e => upd("triggerQuotaTotal", String(Math.round((parseFloat(e.target.value) || 0) * 500000)))} />
+                    </div>
+                  )}
+                  {(cfg.triggerMode || "dead_ratio") === "quota_avg" && (
+                    <div className="flex items-center gap-1">
+                      <Label className="text-xs">≥$</Label>
+                      <Input type="number" className="w-[100px] h-8" value={((parseInt(cfg.triggerQuotaAvg) || 0) / 500000).toFixed(0)} onChange={e => upd("triggerQuotaAvg", String(Math.round((parseFloat(e.target.value) || 0) * 500000)))} />
+                      <span className="text-xs text-muted-foreground">/key</span>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
             <Card>

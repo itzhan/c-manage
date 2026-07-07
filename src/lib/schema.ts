@@ -24,6 +24,7 @@ export const records = sqliteTable("records", {
   cachedQuota: integer("cached_quota").notNull().default(0),
   allDisabledSince: integer("all_disabled_since"),
   frozen: integer("frozen").notNull().default(0),
+  disabledCount: integer("disabled_count").notNull().default(0),
   lastRefresh: integer("last_refresh"),
   importedAt: integer("imported_at").notNull().$defaultFn(() => Math.floor(Date.now() / 1000)),
 });
@@ -34,4 +35,9 @@ export const logs = sqliteTable("logs", {
   message: text("message").notNull(),
   level: text("level").notNull().default("info"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Math.floor(Date.now() / 1000)),
+});
+
+export const dispatchLocks = sqliteTable("dispatch_locks", {
+  lockKey: text("lock_key").primaryKey(),
+  lockedAt: integer("locked_at").notNull(),
 });
