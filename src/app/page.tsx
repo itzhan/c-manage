@@ -183,6 +183,11 @@ export default function Page() {
     for (const l of gLines) await fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: on, autoBatchSize: bs }) });
     fLines();
   };
+  const saveGroupDeadRatio = async (gName: string, ratio: number) => {
+    const gLines = lines.filter(l => l.config?.importMode === "global" && l.config?.globalGroup === gName);
+    for (const l of gLines) await fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...l.config, triggerDeadRatio: String(ratio / 100) } }) });
+    fLines();
+  };
 
   const clrLogs = async () => { if (!lid) return; await fetch(`/api/lines/${lid}/logs`, { method: "DELETE" }); setLogs([]); };
 
@@ -277,20 +282,34 @@ export default function Page() {
             }}>+ 新建分组</Button>
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {groupList.map(g => {
               const memberIds = new Set(g.lines.map(gl => gl.id));
               const groupLinesData = lines.filter(l => memberIds.has(l.id));
               const groupTotalQuota = groupLinesData.reduce((s, l) => s + (l.totalQuota || 0), 0);
               const availableLines = lines.filter(l => !memberIds.has(l.id) && (l.config?.importMode || "independent") !== "global" && l.config?.hidden !== "1");
+              const groupRpmSum = groupLinesData.reduce((s, l) => s + (lineRpm[l.id]?.rpm || 0), 0);
+              const deadRatioVal = Math.round((parseFloat(groupLinesData[0]?.config?.triggerDeadRatio) || 0.67) * 100);
+
+              const maxBatches = groupLinesData.length > 0 ? Math.max(...groupLinesData.map(l => (l.last5 || []).length)) : 0;
+              const batchRows = Array.from({ length: maxBatches }, (_, i) => {
+                const perLine = groupLinesData.map(l => ({ lineId: l.id, rec: (l.last5 || [])[i] || null }));
+                const refRec = perLine.find(p => p.rec)?.rec;
+                const alive = refRec ? refRec.keyCount - refRec.disabledCount : 0;
+                const total = refRec?.keyCount || 0;
+                const frozen = refRec?.frozen || 0;
+                return { perLine, totalQuota: perLine.reduce((s, p) => s + (p.rec?.cachedQuota || 0), 0), alive, total, frozen };
+              });
 
               return (
-                <Card key={g.id}>
-                  <CardContent className="pt-3 pb-3 space-y-2">
-                    {/* Header */}
+                <Card key={g.id} className={groupLinesData.length > 3 ? "lg:col-span-2" : ""}>
+                  <CardContent className="pt-3 pb-3 space-y-3">
+                    {/* A: Header */}
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-600">{g.name}</span>
-                      <span className="text-xs font-mono font-semibold ml-auto">{fmtQ(groupTotalQuota)}</span>
+                      <span className="text-xs font-mono font-semibold">{fmtQ(groupTotalQuota)}</span>
+                      <span className="flex-1" />
+                      {groupRpmSum > 0 && <span className="text-[11px] font-mono tabular-nums text-amber-600">{groupRpmSum}rpm</span>}
                       <button className="text-[10px] text-muted-foreground/50 hover:text-destructive" onClick={async () => {
                         if (!confirm(`确认删除分组「${g.name}」？`)) return;
                         await fetch("/api/groups", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id }) });
@@ -298,46 +317,86 @@ export default function Page() {
                       }}>×</button>
                     </div>
 
-                    {/* Shared key batch size */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-muted-foreground">每批共享key</span>
-                      <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" defaultValue={g.sharedKeyBatchSize}
-                        onBlur={e => { const v = parseInt(e.target.value) || 10; fetch("/api/groups", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, sharedKeyBatchSize: v }) }); fGroups(); }} />
-                      <div className="flex gap-1 ml-auto">
-                        <Button size="sm" className="h-5 text-[9px] px-2" disabled={gdBusy || poolN === 0} onClick={() => doGroupImport(g.name, g.sharedKeyBatchSize)}>上弹</Button>
+                    {/* B: Batch table */}
+                    {groupLinesData.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground/50 py-2 text-center">暂无线路，请添加</p>
+                    ) : batchRows.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground/50 py-2 text-center">暂无批次</p>
+                    ) : (
+                      <div className="rounded-md border overflow-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-12 text-[10px]">#</TableHead>
+                              <TableHead className="w-16 text-[10px]">存活</TableHead>
+                              {groupLinesData.map(l => <TableHead key={l.id} className="text-[10px] text-center">{l.label}</TableHead>)}
+                              <TableHead className="text-[10px] text-right">合计</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {batchRows.map((row, i) => (
+                              <TableRow key={i} className={i === 0 ? "bg-primary/5" : ""}>
+                                <TableCell className="font-mono text-[10px] text-muted-foreground">{i === 0 ? "最新" : `#${i + 1}`}</TableCell>
+                                <TableCell className="text-[10px] tabular-nums">
+                                  {row.frozen ? (
+                                    <span className="text-muted-foreground">冻结</span>
+                                  ) : (
+                                    <span className={row.alive === row.total ? "text-green-500" : row.alive === 0 ? "text-red-500" : "text-orange-500"}>{row.alive}/{row.total}</span>
+                                  )}
+                                </TableCell>
+                                {row.perLine.map(p => (
+                                  <TableCell key={p.lineId} className="text-center font-mono text-[10px]">{p.rec ? fmtQ(p.rec.cachedQuota) : "-"}</TableCell>
+                                ))}
+                                <TableCell className="text-right font-mono text-[10px] font-semibold">{fmtQ(row.totalQuota)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
                       </div>
+                    )}
+
+                    {/* C: Controls */}
+                    <div className="flex items-center gap-2 flex-wrap border-t pt-2">
+                      <span className="text-[10px] text-muted-foreground">死亡阈值</span>
+                      <input className="w-10 h-5 text-[10px] border rounded px-1 text-center" id={`gdr-${g.id}`} defaultValue={deadRatioVal} />
+                      <span className="text-[10px] text-muted-foreground">%</span>
+                      <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                        const v = Math.min(100, Math.max(1, parseInt((document.getElementById(`gdr-${g.id}`) as HTMLInputElement)?.value) || 67));
+                        saveGroupDeadRatio(g.name, v);
+                      }}>存</Button>
+                      <span className="text-[10px] text-muted-foreground ml-2">每批</span>
+                      <input className="w-12 h-5 text-[10px] border rounded px-1 text-center" defaultValue={g.sharedKeyBatchSize}
+                        onBlur={e => { const v = parseInt(e.target.value) || 10; fetch("/api/groups", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, sharedKeyBatchSize: v }) }); fGroups(); }} />
+                      <Switch checked={groupLinesData.every(l => !!l.autoEnabled) && groupLinesData.length > 0} onCheckedChange={v => saveGroupAuto(g.name, v, g.sharedKeyBatchSize)} />
+                      <span className="text-[10px] text-muted-foreground">自动</span>
+                      <Button size="sm" className="h-5 text-[9px] px-2 ml-auto" disabled={gdBusy || poolN === 0} onClick={() => doGroupImport(g.name, g.sharedKeyBatchSize)}>上弹</Button>
                     </div>
 
-                    {/* Member lines */}
-                    <div className="space-y-1">
-                      {groupLinesData.length === 0 && <p className="text-[10px] text-muted-foreground/50 py-1">暂无线路，请添加</p>}
+                    {/* D: Member lines + add */}
+                    <div className="space-y-1 border-t pt-2">
                       {groupLinesData.map(l => (
                         <div key={l.id} className="flex items-center gap-1.5 text-[11px] group">
                           <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${l.activeCount > 0 ? "bg-green-500" : "bg-muted-foreground/30"}`} />
                           <span className="truncate flex-1">{l.label}</span>
-                          <span className="tabular-nums text-muted-foreground">{l.activeCount}</span>
-                          <span className="tabular-nums font-mono">{fmtQ(l.totalQuota || 0)}</span>
                           <button className="text-[9px] text-muted-foreground/30 hover:text-destructive opacity-0 group-hover:opacity-100" onClick={async () => {
                             await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: l.id, checked: false }) });
                             fGroups(); fLines();
                           }}>移出</button>
                         </div>
                       ))}
+                      {availableLines.length > 0 && (
+                        <Select value="" onValueChange={async v => {
+                          if (!v) return;
+                          await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: parseInt(v), checked: true }) });
+                          fGroups(); fLines();
+                        }}>
+                          <SelectTrigger className="h-6 text-[10px]"><SelectValue placeholder="+ 添加线路..." /></SelectTrigger>
+                          <SelectContent>
+                            {availableLines.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
-
-                    {/* Add line selector */}
-                    {availableLines.length > 0 && (
-                      <Select value="" onValueChange={async v => {
-                        if (!v) return;
-                        await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: parseInt(v), checked: true }) });
-                        fGroups(); fLines();
-                      }}>
-                        <SelectTrigger className="h-6 text-[10px]"><SelectValue placeholder="+ 添加线路..." /></SelectTrigger>
-                        <SelectContent>
-                          {availableLines.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.label}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    )}
                   </CardContent>
                 </Card>
               );
