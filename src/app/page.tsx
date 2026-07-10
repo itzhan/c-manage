@@ -277,122 +277,72 @@ export default function Page() {
             }}>+ 新建分组</Button>
           </div>
 
-          {groupList.map(g => {
-            const memberIds = new Set(g.lines.map(gl => gl.id));
-            const groupLinesData = lines.filter(l => memberIds.has(l.id));
-            const groupTotalQuota = groupLinesData.reduce((s, l) => s + (l.totalQuota || 0), 0);
-            const groupTotalKeys = groupLinesData.reduce((s, l) => s + l.totalKeys, 0);
-            const groupTodayKeys = groupLinesData.reduce((s, l) => s + l.todayKeys, 0);
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {groupList.map(g => {
+              const memberIds = new Set(g.lines.map(gl => gl.id));
+              const groupLinesData = lines.filter(l => memberIds.has(l.id));
+              const groupTotalQuota = groupLinesData.reduce((s, l) => s + (l.totalQuota || 0), 0);
+              const availableLines = lines.filter(l => !memberIds.has(l.id) && (l.config?.importMode || "independent") !== "global" && l.config?.hidden !== "1");
 
-            return (
-              <Card key={g.id}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-3 text-sm">
-                    <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-600 font-semibold">{g.name}</span>
-                    <div className="flex items-center gap-2 ml-auto">
-                      <span className="text-[10px] text-muted-foreground tabular-nums">今{groupTodayKeys} / 总{groupTotalKeys}key</span>
-                      <span className="text-xs font-mono font-semibold">{fmtQ(groupTotalQuota)}</span>
+              return (
+                <Card key={g.id}>
+                  <CardContent className="pt-3 pb-3 space-y-2">
+                    {/* Header */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-600">{g.name}</span>
+                      <span className="text-xs font-mono font-semibold ml-auto">{fmtQ(groupTotalQuota)}</span>
+                      <button className="text-[10px] text-muted-foreground/50 hover:text-destructive" onClick={async () => {
+                        if (!confirm(`确认删除分组「${g.name}」？`)) return;
+                        await fetch("/api/groups", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id }) });
+                        fGroups(); fLines();
+                      }}>×</button>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <Label className="text-[10px] text-muted-foreground">每批共享key</Label>
-                      <input className="w-14 h-6 text-xs border rounded px-1 text-center" defaultValue={g.sharedKeyBatchSize}
+
+                    {/* Shared key batch size */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground">每批共享key</span>
+                      <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" defaultValue={g.sharedKeyBatchSize}
                         onBlur={e => { const v = parseInt(e.target.value) || 10; fetch("/api/groups", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id, sharedKeyBatchSize: v }) }); fGroups(); }} />
+                      <div className="flex gap-1 ml-auto">
+                        <Button size="sm" className="h-5 text-[9px] px-2" disabled={gdBusy || poolN === 0} onClick={() => doGroupImport(g.name, g.sharedKeyBatchSize)}>上弹</Button>
+                      </div>
                     </div>
-                    <Button size="sm" variant="ghost" className="h-6 text-[10px] text-destructive" onClick={async () => {
-                      if (!confirm(`确认删除分组「${g.name}」？组内线路将变为独立线路。`)) return;
-                      await fetch("/api/groups", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: g.id }) });
-                      fGroups(); fLines();
-                    }}>删除</Button>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10"></TableHead>
-                        <TableHead>线路名称</TableHead>
-                        <TableHead className="w-20">活跃</TableHead>
-                        <TableHead className="w-24">今日key</TableHead>
-                        <TableHead className="w-28">总值</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {lines.filter(l => l.config?.hidden !== "1").map(l => {
-                        const inGroup = memberIds.has(l.id);
-                        const inOtherGroup = !inGroup && l.config?.importMode === "global" && l.config?.globalGroup;
-                        return (
-                          <TableRow key={l.id} className={inOtherGroup ? "opacity-40" : ""}>
-                            <TableCell>
-                              <input type="checkbox" className="w-3.5 h-3.5 rounded" checked={inGroup} disabled={!!inOtherGroup}
-                                onChange={async e => {
-                                  await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: l.id, checked: e.target.checked }) });
-                                  fGroups(); fLines();
-                                }} />
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-sm">{l.label}</span>
-                                {inOtherGroup && <span className="text-[9px] px-1 rounded bg-blue-500/20 text-blue-600">{l.config.globalGroup}</span>}
-                                {l.autoEnabled ? <span className="text-[9px] px-1 rounded bg-green-500/10 text-green-600">自动</span> : null}
-                              </div>
-                              {l.config?.channelName && <p className="text-[10px] text-muted-foreground truncate">{l.config.channelName}</p>}
-                            </TableCell>
-                            <TableCell><Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[9px]">{l.activeCount}</Badge></TableCell>
-                            <TableCell className="text-xs tabular-nums">{l.todayKeys} / {l.totalKeys}</TableCell>
-                            <TableCell className="font-mono text-xs font-semibold">{fmtQ(l.totalQuota || 0)}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                  <div className="flex items-center gap-3 mt-3 pt-2 border-t">
-                    <Switch checked={groupLinesData.every(l => !!l.autoEnabled) && groupLinesData.length > 0} onCheckedChange={v => saveGroupAuto(g.name, v, g.sharedKeyBatchSize)} />
-                    <span className="text-[10px] text-muted-foreground">自动上弹</span>
-                    <div className="flex gap-1 ml-auto">
-                      <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gq-${g.id}`} defaultValue={g.sharedKeyBatchSize} />
-                      <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`gq-${g.id}`) as HTMLInputElement)?.value) || 10; doGroupImport(g.name, v); }}>上弹</Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
 
-          {/* Ungrouped lines overview */}
-          {lines.filter(l => (l.config?.importMode || "independent") !== "global" && l.config?.hidden !== "1").length > 0 && (
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">未分组线路</CardTitle></CardHeader>
-              <CardContent className="pt-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>线路名称</TableHead>
-                      <TableHead className="w-20">活跃</TableHead>
-                      <TableHead className="w-24">今日key</TableHead>
-                      <TableHead className="w-28">总值</TableHead>
-                      <TableHead className="w-20"></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lines.filter(l => (l.config?.importMode || "independent") !== "global" && l.config?.hidden !== "1").map(l => (
-                      <TableRow key={l.id}>
-                        <TableCell>
-                          <span className="text-sm">{l.label}</span>
-                          {l.config?.channelName && <p className="text-[10px] text-muted-foreground truncate">{l.config.channelName}</p>}
-                        </TableCell>
-                        <TableCell><Badge variant={l.activeCount > 0 ? "default" : "secondary"} className="text-[9px]">{l.activeCount}</Badge></TableCell>
-                        <TableCell className="text-xs tabular-nums">{l.todayKeys} / {l.totalKeys}</TableCell>
-                        <TableCell className="font-mono text-xs font-semibold">{fmtQ(l.totalQuota || 0)}</TableCell>
-                        <TableCell>
-                          <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情</Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
+                    {/* Member lines */}
+                    <div className="space-y-1">
+                      {groupLinesData.length === 0 && <p className="text-[10px] text-muted-foreground/50 py-1">暂无线路，请添加</p>}
+                      {groupLinesData.map(l => (
+                        <div key={l.id} className="flex items-center gap-1.5 text-[11px] group">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${l.activeCount > 0 ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+                          <span className="truncate flex-1">{l.label}</span>
+                          <span className="tabular-nums text-muted-foreground">{l.activeCount}</span>
+                          <span className="tabular-nums font-mono">{fmtQ(l.totalQuota || 0)}</span>
+                          <button className="text-[9px] text-muted-foreground/30 hover:text-destructive opacity-0 group-hover:opacity-100" onClick={async () => {
+                            await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: l.id, checked: false }) });
+                            fGroups(); fLines();
+                          }}>移出</button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add line selector */}
+                    {availableLines.length > 0 && (
+                      <Select value="" onValueChange={async v => {
+                        if (!v) return;
+                        await fetch("/api/groups/toggle-line", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ groupId: g.id, lineId: parseInt(v), checked: true }) });
+                        fGroups(); fLines();
+                      }}>
+                        <SelectTrigger className="h-6 text-[10px]"><SelectValue placeholder="+ 添加线路..." /></SelectTrigger>
+                        <SelectContent>
+                          {availableLines.map(l => <SelectItem key={l.id} value={String(l.id)}>{l.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
 
           {/* === Original Line Cards === */}
           {lines.filter(l => l.config?.hidden === "1").length > 0 && (
