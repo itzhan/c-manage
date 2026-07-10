@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { lines, records, keys, dispatchLocks } from "@/lib/schema";
 import { eq, asc } from "drizzle-orm";
-import { addLog, executeImport, saveChannelSlots, createRecordAndAdvanceName, getCookie } from "@/lib/channel";
+import { addLog, executeImport, saveChannelSlots, createRecordAndAdvanceName, getCookie, getAuthHeaders } from "@/lib/channel";
 
 const FREEZE_AFTER = 5 * 60;
 const BILLING_GRACE = 3 * 60;
@@ -100,9 +100,13 @@ async function doImportForLine(line: any, cfg: Record<string, string>, batchSize
 async function autoImportGlobal(groupLines: Map<string, any[]>, allCfgs: Map<number, Record<string, string>>) {
   for (const [group, gLines] of groupLines) {
     let totalChannels = 0, totalDisabled = 0, totalQuota = 0;
+    let hasUnmonitored = false;
     for (const line of gLines) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
       const latest = unfrozen[unfrozen.length - 1];
+      if (latest && latest.lastRefresh === null) {
+        hasUnmonitored = true;
+      }
       if (latest) {
         totalChannels += latest.keyCount;
         totalDisabled += latest.disabledCount;
@@ -110,6 +114,7 @@ async function autoImportGlobal(groupLines: Map<string, any[]>, allCfgs: Map<num
       }
     }
 
+    if (hasUnmonitored) continue;
     if (totalChannels <= 0) continue;
 
     const firstCfg = allCfgs.get(gLines[0].id) || {};
@@ -198,10 +203,106 @@ export async function POST() {
       updated++;
     }
 
-    // Phase 2: Trigger check — only on the latest non-frozen record
+    // Phase 2: Trigger check
     if (line.autoEnabled) {
-      const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
+      const strategy = cfg.importStrategy || "default";
+      const allRecs = db.select().from(records).where(eq(records.lineId, line.id)).all();
+      const unfrozen = allRecs.filter(r => !r.frozen);
       const latest = unfrozen[unfrozen.length - 1];
+
+      // fixed_slots 策略：监控每个固定渠道，哪个挂了就换哪个的 key
+      if (strategy === "fixed_slots") {
+        const slotIds: number[] = JSON.parse(cfg.fixedSlotIds || "[]");
+        if (slotIds.length === 0) continue;
+
+        const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
+        const headers = getAuthHeaders(cfg);
+        const cookie = getCookie(cfg);
+        const searchHeaders: Record<string, string> = {
+          "Content-Type": "application/json", "Accept": "application/json",
+          "New-API-User": cfg.newApiUser || "3", "Cache-Control": "no-store",
+        };
+        if (cookie) searchHeaders["Cookie"] = cookie;
+
+        // 逐个检查渠道状态
+        for (const chId of slotIds) {
+          try {
+            const resp = await fetch(`${baseUrl}/api/channel/${chId}`, { headers: searchHeaders });
+            const data = await resp.json();
+            const ch = data.data || data;
+            if (!ch || !ch.id) continue;
+
+            if (ch.status === 3) {
+              // 渠道被禁用，换 key
+              const lockKey = `slot:${line.id}:${chId}`;
+              if (!acquireLock(lockKey)) continue;
+              try {
+                const poolKey = db.select().from(keys).orderBy(asc(keys.id)).limit(1).all();
+                if (!poolKey.length) {
+                  addLog(line.id, `[固定槽位] 渠道 ${chId} 需要换key但密钥池为空`, "warn");
+                  continue;
+                }
+                const newKey = poolKey[0].key;
+                db.delete(keys).where(eq(keys.id, poolKey[0].id)).run();
+
+                const putResp = await fetch(`${baseUrl}/api/channel/`, {
+                  method: "PUT", headers,
+                  body: JSON.stringify({ id: chId, key: "\n" + newKey, status: 1 }),
+                });
+                if (putResp.ok) {
+                  addLog(line.id, `[固定槽位] 渠道 ${chId} 已换key+启用`, "ok");
+                  cooldown = true;
+                } else {
+                  db.insert(keys).values({ key: newKey }).run();
+                  addLog(line.id, `[固定槽位] 渠道 ${chId} 换key失败: ${putResp.status}`, "err");
+                }
+              } finally {
+                releaseLock(lockKey);
+              }
+            }
+            updated++;
+          } catch { /* skip */ }
+        }
+        continue;
+      }
+
+      // rotate 策略：检测到冻结批次就换 key，换完解冻
+      if (strategy === "rotate") {
+        const frozenRecs = allRecs.filter(r => r.frozen);
+        const latestFrozen = frozenRecs[frozenRecs.length - 1];
+        if (latestFrozen) {
+          const lockKey = `line:${line.id}:rotate`;
+          if (acquireLock(lockKey)) {
+            try {
+              const batchSize = line.autoBatchSize || 10;
+              const poolKeys = db.select().from(keys).orderBy(asc(keys.id)).limit(batchSize).all();
+              if (poolKeys.length > 0) {
+                const useKeys = poolKeys.map(k => k.key);
+                for (const k of poolKeys) db.delete(keys).where(eq(keys.id, k.id)).run();
+                addLog(line.id, `[自动换key] 换 ${useKeys.length} 个密钥 → 「${latestFrozen.name}」`, "info");
+                const result = await executeImport(cfg, useKeys, line.id);
+                addLog(line.id, `[自动换key] executeImport 返回 ok=${result.ok}`, "info");
+                if (result.ok) {
+                  db.update(records).set({ frozen: 0, allDisabledSince: null, disabledCount: 0 }).where(eq(records.id, latestFrozen.id)).run();
+                  addLog(line.id, `[自动换key] 「${latestFrozen.name}」已换key+解冻 (recordId=${latestFrozen.id})`, "ok");
+                } else {
+                  for (const k of useKeys) { try { db.insert(keys).values({ key: k }).run(); } catch { /* dup */ } }
+                  addLog(line.id, `[自动换key] 换key失败 ok=${result.ok}，密钥已退回`, "warn");
+                }
+                cooldown = true;
+              }
+            } finally {
+              releaseLock(lockKey);
+            }
+          }
+        }
+        continue;
+      }
+
+      // 跳过刚创建还没被刷新过的批次
+      if (latest && latest.lastRefresh === null) {
+        continue;
+      }
 
       if (latest && latest.keyCount > 0 && checkTrigger(latest, cfg)) {
         if (isGlobal) {

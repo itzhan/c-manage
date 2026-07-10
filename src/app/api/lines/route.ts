@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { lines, records } from "@/lib/schema";
-import { eq, count, and, sum, desc, gte } from "drizzle-orm";
+import { eq, count, and, sum, desc, gte, sql } from "drizzle-orm";
 
 export async function GET() {
   const allLines = db.select().from(lines).orderBy(lines.sortOrder, lines.id).all();
@@ -15,7 +15,9 @@ export async function GET() {
     const [{ value: totalKeys }] = db.select({ value: sum(records.keyCount) }).from(records).where(eq(records.lineId, l.id)).all();
     const [{ value: todayKeys }] = db.select({ value: sum(records.keyCount) }).from(records).where(and(eq(records.lineId, l.id), gte(records.importedAt, todayStart))).all();
 
-    return { ...l, config: JSON.parse(l.config), recordCount: total, activeCount: active, last5, totalKeys: totalKeys ?? 0, todayKeys: todayKeys ?? 0 };
+    const [{ value: totalQuota }] = db.select({ value: sum(records.cachedQuota) }).from(records).where(eq(records.lineId, l.id)).all();
+
+    return { ...l, config: JSON.parse(l.config), recordCount: total, activeCount: active, last5, totalKeys: totalKeys ?? 0, todayKeys: todayKeys ?? 0, totalQuota: totalQuota ?? 0 };
   });
   return Response.json({ success: true, data: result });
 }

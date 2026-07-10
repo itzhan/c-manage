@@ -116,7 +116,7 @@ export function buildZhongzhuanPayload(cfg: Record<string, string>, keys: string
     category: cfg.zhongzhuanCategory || "anthropic",
     items: keys.map(k => ({ key: k.trim(), base_url: "", remark: "", proxy: "" })),
     models,
-    tag: cfg.tag || cfg.channelName || "",
+    tag: cfg.channelName || cfg.tag || "",
     remark: "",
     proxy: "",
     standby: false,
@@ -237,39 +237,58 @@ async function importBatch(cfg: Record<string, string>, headers: Record<string, 
 
 async function rotateKeys(cfg: Record<string, string>, headers: Record<string, string>, useKeys: string[], lineId: number): Promise<boolean> {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
-  const slots = (db as any).prepare("SELECT * FROM channel_slots WHERE line_id = ? AND status = 'active' ORDER BY id").all(lineId) as any[];
 
-  if (slots.length === 0) {
-    addLog(lineId, "[换key] 无固定渠道，请先用默认模式创建", "warn");
+  // 找到最新的冻结批次，用它的渠道名去搜索远程渠道
+  const frozenRecs = db.select().from(records).where(eq(records.lineId, lineId)).all().filter(r => r.frozen);
+  const latestFrozen = frozenRecs[frozenRecs.length - 1];
+  if (!latestFrozen) {
+    addLog(lineId, "[换key] 没有冻结批次，跳过", "warn");
     return false;
   }
 
-  const keyStr = "\n" + useKeys.join("\n");
-  let success = 0;
+  const channelName = latestFrozen.name;
+  addLog(lineId, `[换key] 搜索冻结渠道「${channelName}」...`, "info");
 
-  for (const slot of slots) {
-    try {
-      const resp = await fetch(`${baseUrl}/api/channel/`, {
-        method: "PUT", headers,
-        body: JSON.stringify({ id: slot.remote_channel_id, key: keyStr, status: 1 }),
-      });
-      if (resp.ok) {
-        success++;
-        addLog(lineId, `[换key] 渠道 ${slot.name} (${slot.remote_channel_id}) 已更新`, "ok");
-        await fetch(`${baseUrl}/api/channel/`, {
-          method: "PUT", headers,
-          body: JSON.stringify({ id: slot.remote_channel_id, status: 1 }),
-        });
-      } else {
-        addLog(lineId, `[换key] 渠道 ${slot.remote_channel_id} 更新失败: ${resp.statusText}`, "err");
-      }
-    } catch {
-      addLog(lineId, `[换key] 渠道 ${slot.remote_channel_id} 请求失败`, "err");
+  // 搜索远程渠道
+  try {
+    const searchUrl = `${baseUrl}/api/channel/search?keyword=${encodeURIComponent(channelName)}&group=&model=&id_sort=false&tag_mode=false&p=1&page_size=100`;
+    const searchResp = await fetch(searchUrl, { method: "GET", headers });
+    const searchData = await searchResp.json();
+    const channels = (searchData.data?.items || []).filter((ch: any) => ch.name === channelName);
+
+    if (channels.length === 0) {
+      addLog(lineId, `[换key] 未找到渠道「${channelName}」`, "warn");
+      return false;
     }
-  }
 
-  addLog(lineId, `[换key] 完成: ${success}/${slots.length} 渠道已更新`, success > 0 ? "ok" : "err");
-  return success > 0;
+    const keyStr = "\n" + useKeys.join("\n");
+    let success = 0;
+
+    for (const ch of channels) {
+      try {
+        const resp = await fetch(`${baseUrl}/api/channel/`, {
+          method: "PUT", headers,
+          body: JSON.stringify({ id: ch.id, key: keyStr, status: 1 }),
+        });
+        if (resp.ok) {
+          success++;
+          addLog(lineId, `[换key] 渠道 ${ch.id}「${channelName}」已换key+启用`, "ok");
+        } else {
+          addLog(lineId, `[换key] 渠道 ${ch.id} 更新失败: ${resp.status}`, "err");
+        }
+      } catch (e: unknown) {
+        addLog(lineId, `[换key] 渠道 ${ch.id} 请求失败: ${e instanceof Error ? e.message : String(e)}`, "err");
+      }
+    }
+
+    // 解冻由 refresh 处理，这里只负责换 key
+
+    addLog(lineId, `[换key] 完成: ${success}/${channels.length} 渠道已更新`, success > 0 ? "ok" : "err");
+    return success > 0;
+  } catch (e: unknown) {
+    addLog(lineId, `[换key] 搜索失败: ${e instanceof Error ? e.message : String(e)}`, "err");
+    return false;
+  }
 }
 
 export async function executeImport(cfg: Record<string, string>, useKeys: string[], lineId: number): Promise<{ ok: boolean; channelIds: number[] }> {

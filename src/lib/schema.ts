@@ -41,3 +41,10 @@ export const dispatchLocks = sqliteTable("dispatch_locks", {
   lockKey: text("lock_key").primaryKey(),
   lockedAt: integer("locked_at").notNull(),
 });
+
+export const groups = sqliteTable("groups", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  sharedKeyBatchSize: integer("shared_key_batch_size").notNull().default(10),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Math.floor(Date.now() / 1000)),
+});

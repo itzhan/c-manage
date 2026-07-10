@@ -22,6 +22,7 @@ if (!globalForDb.__sqlite) {
     CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, line_id INTEGER NOT NULL, message TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'info', created_at INTEGER NOT NULL DEFAULT (unixepoch()));
     CREATE TABLE IF NOT EXISTS channel_slots (id INTEGER PRIMARY KEY AUTOINCREMENT, line_id INTEGER NOT NULL, remote_channel_id INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', total_quota INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL DEFAULT (unixepoch()));
     CREATE TABLE IF NOT EXISTS dispatch_locks (lock_key TEXT PRIMARY KEY, locked_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, shared_key_batch_size INTEGER NOT NULL DEFAULT 10, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
   `);
 
   try { sqlite.exec("ALTER TABLE records ADD COLUMN disabled_count INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
