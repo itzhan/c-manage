@@ -64,6 +64,7 @@ export default function Page() {
   // Dashboard
   const [showDashboard, setShowDashboard] = useState(true);
   const [expandedLine, setExpandedLine] = useState<number | null>(null);
+  const [editingLineId, setEditingLineId] = useState<number | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [gdBusy, setGdBusy] = useState(false);
   const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; error?: string; keyCount?: number }>>([]);
@@ -476,125 +477,132 @@ export default function Page() {
                         </div>
                       )}
 
-                      <div className="flex items-center gap-2 border-t pt-2">
-                        <span className="text-[10px] text-muted-foreground">投递:</span>
-                        {["default", "overlap", "rotate", "fixed_slots"].map(s => (
-                          <button key={s} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.importStrategy || "default") === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
-                            onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, importStrategy: s } }) }); fLines(); }}>
-                            {s === "default" ? "默认" : s === "overlap" ? "重叠" : s === "rotate" ? "换key" : "固定槽位"}
-                          </button>
-                        ))}
-                        {(lCfg.importStrategy || "default") === "overlap" && (
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-muted-foreground">×</span>
-                            <input className="w-8 h-5 text-[10px] border rounded px-1 text-center" id={`om-${l.id}`} defaultValue={parseInt(lCfg.overlapMultiplier) || 2} />
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
-                              const v = parseInt((document.getElementById(`om-${l.id}`) as HTMLInputElement)?.value) || 2;
-                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, overlapMultiplier: String(v) } }) }); fLines();
-                            }}>存</Button>
+                      {editingLineId === l.id ? (
+                        <>
+                          <div className="flex items-center gap-2 border-t pt-2">
+                            <span className="text-[10px] text-muted-foreground">投递:</span>
+                            {["default", "overlap", "rotate", "fixed_slots"].map(s => (
+                              <button key={s} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.importStrategy || "default") === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                                onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, importStrategy: s } }) }); fLines(); }}>
+                                {s === "default" ? "默认" : s === "overlap" ? "重叠" : s === "rotate" ? "换key" : "固定槽位"}
+                              </button>
+                            ))}
+                            {(lCfg.importStrategy || "default") === "overlap" && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-muted-foreground">×</span>
+                                <input className="w-8 h-5 text-[10px] border rounded px-1 text-center" id={`om-${l.id}`} defaultValue={parseInt(lCfg.overlapMultiplier) || 2} />
+                                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                                  const v = parseInt((document.getElementById(`om-${l.id}`) as HTMLInputElement)?.value) || 2;
+                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, overlapMultiplier: String(v) } }) }); fLines();
+                                }}>存</Button>
+                              </div>
+                            )}
+                            {lCfg.importStrategy === "fixed_slots" && (
+                              <div className="flex items-center gap-1">
+                                <input className="w-8 h-5 text-[10px] border rounded px-1 text-center" id={`fs-${l.id}`} defaultValue={parseInt(lCfg.fixedSlotCount) || 10} />
+                                <span className="text-[10px] text-muted-foreground">槽</span>
+                                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={async () => {
+                                  const n = parseInt((document.getElementById(`fs-${l.id}`) as HTMLInputElement)?.value) || 10;
+                                  const r = await fetch(`/api/lines/${l.id}/init-slots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: n }) });
+                                  const d = await r.json();
+                                  alert(d.success ? `已创建 ${d.data?.created} 个槽位` : d.error);
+                                  fLines();
+                                }}>初始化</Button>
+                                {lCfg.fixedSlotIds && <span className="text-[9px] text-green-600">{JSON.parse(lCfg.fixedSlotIds || "[]").length}个</span>}
+                              </div>
+                            )}
                           </div>
-                        )}
-                        {lCfg.importStrategy === "fixed_slots" && (
-                          <div className="flex items-center gap-1">
-                            <input className="w-8 h-5 text-[10px] border rounded px-1 text-center" id={`fs-${l.id}`} defaultValue={parseInt(lCfg.fixedSlotCount) || 10} />
-                            <span className="text-[10px] text-muted-foreground">槽</span>
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={async () => {
-                              const n = parseInt((document.getElementById(`fs-${l.id}`) as HTMLInputElement)?.value) || 10;
-                              const r = await fetch(`/api/lines/${l.id}/init-slots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: n }) });
-                              const d = await r.json();
-                              alert(d.success ? `已创建 ${d.data?.created} 个槽位` : d.error);
-                              fLines();
-                            }}>初始化</Button>
-                            {lCfg.fixedSlotIds && <span className="text-[9px] text-green-600">{JSON.parse(lCfg.fixedSlotIds || "[]").length}个</span>}
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-muted-foreground">触发:</span>
+                            {(["dead_ratio", "quota_total", "quota_avg"] as const).map(m => (
+                              <button key={m} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.triggerMode || "dead_ratio") === m ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                                onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerMode: m } }) }); fLines(); }}>
+                                {m === "dead_ratio" ? "死亡比例" : m === "quota_total" ? "总额度" : "平均额度"}
+                              </button>
+                            ))}
+                            {(lCfg.triggerMode || "dead_ratio") === "dead_ratio" && (
+                              <div className="flex items-center gap-1">
+                                <input className="w-10 h-5 text-[10px] border rounded px-1 text-center" id={`tdr-${l.id}`} defaultValue={Math.round((parseFloat(lCfg.triggerDeadRatio) || 0.67) * 100)} />
+                                <span className="text-[10px] text-muted-foreground">%</span>
+                                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                                  const v = Math.min(100, Math.max(1, parseInt((document.getElementById(`tdr-${l.id}`) as HTMLInputElement)?.value) || 67));
+                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerDeadRatio: String(v / 100) } }) }); fLines();
+                                }}>存</Button>
+                              </div>
+                            )}
+                            {(lCfg.triggerMode || "dead_ratio") === "quota_total" && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-muted-foreground">≥$</span>
+                                <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqt-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaTotal) || 0) / 500000).toFixed(0)} />
+                                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                                  const v = parseFloat((document.getElementById(`tqt-${l.id}`) as HTMLInputElement)?.value) || 0;
+                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaTotal: String(Math.round(v * 500000)) } }) }); fLines();
+                                }}>存</Button>
+                              </div>
+                            )}
+                            {(lCfg.triggerMode || "dead_ratio") === "quota_avg" && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-muted-foreground">≥$</span>
+                                <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqa-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaAvg) || 0) / 500000).toFixed(0)} />
+                                <span className="text-[10px] text-muted-foreground">/key</span>
+                                <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
+                                  const v = parseFloat((document.getElementById(`tqa-${l.id}`) as HTMLInputElement)?.value) || 0;
+                                  fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaAvg: String(Math.round(v * 500000)) } }) }); fLines();
+                                }}>存</Button>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-muted-foreground">触发:</span>
-                        {(["dead_ratio", "quota_total", "quota_avg"] as const).map(m => (
-                          <button key={m} className={`text-[10px] px-1.5 py-0.5 rounded ${(lCfg.triggerMode || "dead_ratio") === m ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
-                            onClick={() => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerMode: m } }) }); fLines(); }}>
-                            {m === "dead_ratio" ? "死亡比例" : m === "quota_total" ? "总额度" : "平均额度"}
-                          </button>
-                        ))}
-                        {(lCfg.triggerMode || "dead_ratio") === "dead_ratio" && (
-                          <div className="flex items-center gap-1">
-                            <input className="w-10 h-5 text-[10px] border rounded px-1 text-center" id={`tdr-${l.id}`} defaultValue={Math.round((parseFloat(lCfg.triggerDeadRatio) || 0.67) * 100)} />
-                            <span className="text-[10px] text-muted-foreground">%</span>
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
-                              const v = Math.min(100, Math.max(1, parseInt((document.getElementById(`tdr-${l.id}`) as HTMLInputElement)?.value) || 67));
-                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerDeadRatio: String(v / 100) } }) }); fLines();
-                            }}>存</Button>
+                          <div className="flex gap-2 flex-wrap items-end">
+                            {isGlobal ? (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <Label className="text-[10px]">每批</Label>
+                                  <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gb-${l.id}`} defaultValue={groupBatch} />
+                                  <Label className="text-[10px]">比例</Label>
+                                  <input className="w-10 h-6 text-xs border rounded px-1 text-center" id={`gr-${l.id}`} defaultValue={parseInt(lCfg.globalRatio) || 100} />
+                                  <span className="text-[10px] text-muted-foreground">%</span>
+                                  <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
+                                    const batch = parseInt((document.getElementById(`gb-${l.id}`) as HTMLInputElement)?.value) || 10;
+                                    const ratio = Math.min(100, Math.max(0, parseInt((document.getElementById(`gr-${l.id}`) as HTMLInputElement)?.value) || 100));
+                                    const gLines2 = lines.filter(x => x.config?.globalGroup === lCfg.globalGroup && x.config?.importMode === "global");
+                                    for (const x of gLines2) fetch(`/api/lines/${x.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...x.config, globalGroupBatch: String(batch), globalRatio: String(ratio) }, autoBatchSize: batch }) });
+                                    fLines();
+                                  }}>保存</Button>
+                                </div>
+                                <Switch checked={!!l.autoEnabled} onCheckedChange={v => saveGroupAuto(lCfg.globalGroup || "", v, groupBatch)} />
+                                <span className="text-[10px] text-muted-foreground">自动</span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-1">
+                                  <Label className="text-[10px]">每批</Label>
+                                  <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`bs-${l.id}`} defaultValue={l.autoBatchSize || 10} />
+                                  <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
+                                    const v = parseInt((document.getElementById(`bs-${l.id}`) as HTMLInputElement)?.value) || 10;
+                                    fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: v }) }); fLines();
+                                  }}>保存</Button>
+                                </div>
+                                <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
+                                <span className="text-[10px] text-muted-foreground">自动</span>
+                              </>
+                            )}
+                            <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 ml-auto" onClick={() => setEditingLineId(null)}>完成</Button>
                           </div>
-                        )}
-                        {(lCfg.triggerMode || "dead_ratio") === "quota_total" && (
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-muted-foreground">≥$</span>
-                            <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqt-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaTotal) || 0) / 500000).toFixed(0)} />
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
-                              const v = parseFloat((document.getElementById(`tqt-${l.id}`) as HTMLInputElement)?.value) || 0;
-                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaTotal: String(Math.round(v * 500000)) } }) }); fLines();
-                            }}>存</Button>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-3 text-[10px] border-t pt-2 flex-wrap">
+                          <span className="text-muted-foreground">投递:<strong className="ml-0.5">{{ default: "默认", overlap: "重叠", rotate: "换key", fixed_slots: "固定槽位" }[lCfg.importStrategy || "default"]}</strong></span>
+                          <span className="text-muted-foreground">触发:<strong className="ml-0.5">{(lCfg.triggerMode || "dead_ratio") === "dead_ratio" ? `死亡${Math.round((parseFloat(lCfg.triggerDeadRatio) || 0.67) * 100)}%` : (lCfg.triggerMode || "dead_ratio") === "quota_total" ? `总额≥${fmtQ(parseInt(lCfg.triggerQuotaTotal) || 0)}` : `均额≥${fmtQ(parseInt(lCfg.triggerQuotaAvg) || 0)}/key`}</strong></span>
+                          <span className="text-muted-foreground">每批:<strong className="ml-0.5">{isGlobal ? groupBatch : l.autoBatchSize || 10}</strong></span>
+                          <span className={l.autoEnabled ? "text-green-500" : "text-muted-foreground/50"}>{l.autoEnabled ? "自动:开" : "自动:关"}</span>
+                          <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5" onClick={() => setEditingLineId(l.id)}>编辑</Button>
+                          <div className="flex gap-1 ml-auto">
+                            <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`qi-${l.id}`} defaultValue={isGlobal ? groupBatch : l.autoBatchSize || 10} />
+                            <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; isGlobal ? doGroupImport(lCfg.globalGroup || "", v) : doQuickImport(l.id, v); }}>上弹</Button>
                           </div>
-                        )}
-                        {(lCfg.triggerMode || "dead_ratio") === "quota_avg" && (
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-muted-foreground">≥$</span>
-                            <input className="w-14 h-5 text-[10px] border rounded px-1 text-center" id={`tqa-${l.id}`} defaultValue={((parseInt(lCfg.triggerQuotaAvg) || 0) / 500000).toFixed(0)} />
-                            <span className="text-[10px] text-muted-foreground">/key</span>
-                            <Button size="sm" variant="outline" className="h-5 text-[9px] px-1" onClick={() => {
-                              const v = parseFloat((document.getElementById(`tqa-${l.id}`) as HTMLInputElement)?.value) || 0;
-                              fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...lCfg, triggerQuotaAvg: String(Math.round(v * 500000)) } }) }); fLines();
-                            }}>存</Button>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex gap-2 flex-wrap items-end">
-                        {isGlobal ? (
-                          <>
-                            <div className="flex items-center gap-1">
-                              <Label className="text-[10px]">每批</Label>
-                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gb-${l.id}`} defaultValue={groupBatch} />
-                              <Label className="text-[10px]">比例</Label>
-                              <input className="w-10 h-6 text-xs border rounded px-1 text-center" id={`gr-${l.id}`} defaultValue={parseInt(lCfg.globalRatio) || 100} />
-                              <span className="text-[10px] text-muted-foreground">%</span>
-                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
-                                const batch = parseInt((document.getElementById(`gb-${l.id}`) as HTMLInputElement)?.value) || 10;
-                                const ratio = Math.min(100, Math.max(0, parseInt((document.getElementById(`gr-${l.id}`) as HTMLInputElement)?.value) || 100));
-                                const gLines2 = lines.filter(x => x.config?.globalGroup === lCfg.globalGroup && x.config?.importMode === "global");
-                                for (const x of gLines2) fetch(`/api/lines/${x.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config: { ...x.config, globalGroupBatch: String(batch), globalRatio: String(ratio) }, autoBatchSize: batch }) });
-                                fLines();
-                              }}>保存</Button>
-                            </div>
-                            <Switch checked={!!l.autoEnabled} onCheckedChange={v => saveGroupAuto(lCfg.globalGroup || "", v, groupBatch)} />
-                            <span className="text-[10px] text-muted-foreground">自动</span>
-                            <div className="flex gap-1 ml-auto">
-                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`gq-${l.id}`} defaultValue={groupBatch} />
-                              <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`gq-${l.id}`) as HTMLInputElement)?.value) || 10; doGroupImport(lCfg.globalGroup || "", v); }}>上弹</Button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex items-center gap-1">
-                              <Label className="text-[10px]">每批</Label>
-                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`bs-${l.id}`} defaultValue={l.autoBatchSize || 10} />
-                              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => {
-                                const v = parseInt((document.getElementById(`bs-${l.id}`) as HTMLInputElement)?.value) || 10;
-                                fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoBatchSize: v }) }); fLines();
-                              }}>保存</Button>
-                            </div>
-                            <Switch checked={!!l.autoEnabled} onCheckedChange={v => { fetch(`/api/lines/${l.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoEnabled: v }) }); fLines(); }} />
-                            <span className="text-[10px] text-muted-foreground">自动</span>
-                            <div className="flex gap-1 ml-auto">
-                              <input className="w-12 h-6 text-xs border rounded px-1 text-center" id={`qi-${l.id}`} defaultValue={l.autoBatchSize || 10} />
-                              <Button size="sm" className="h-6 text-[10px] px-2" disabled={gdBusy || poolN === 0} onClick={() => { const v = parseInt((document.getElementById(`qi-${l.id}`) as HTMLInputElement)?.value) || 10; doQuickImport(l.id, v); }}>上弹</Button>
-                            </div>
-                          </>
-                        )}
-                        <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情→</Button>
-                      </div>
+                          <Button size="sm" variant="ghost" className="h-6 text-[10px]" onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}>详情→</Button>
+                        </div>
+                      )}
                   </div>
                 </Card>
               );

@@ -98,13 +98,14 @@ async function doImportForLine(line: any, cfg: Record<string, string>, batchSize
 }
 
 async function autoImportGlobal(groupLines: Map<string, any[]>, allCfgs: Map<number, Record<string, string>>) {
+  const now = Math.floor(Date.now() / 1000);
   for (const [group, gLines] of groupLines) {
     let totalChannels = 0, totalDisabled = 0, totalQuota = 0;
     let hasUnmonitored = false;
     for (const line of gLines) {
       const unfrozen = db.select().from(records).where(eq(records.lineId, line.id)).all().filter(r => !r.frozen);
       const latest = unfrozen[unfrozen.length - 1];
-      if (latest && latest.lastRefresh === null) {
+      if (latest && (latest.lastRefresh === null || now - latest.importedAt < 30)) {
         hasUnmonitored = true;
       }
       if (latest) {
@@ -299,8 +300,8 @@ export async function POST() {
         continue;
       }
 
-      // 跳过刚创建还没被刷新过的批次
-      if (latest && latest.lastRefresh === null) {
+      // 跳过刚创建的批次（30s冷却 + 未监控）
+      if (latest && (latest.lastRefresh === null || now - latest.importedAt < 30)) {
         continue;
       }
 
