@@ -65,6 +65,7 @@ export default function Page() {
   const [showDashboard, setShowDashboard] = useState(true);
   const [expandedLine, setExpandedLine] = useState<number | null>(null);
   const [editingLineId, setEditingLineId] = useState<number | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [gdBusy, setGdBusy] = useState(false);
   const [gdResults, setGdResults] = useState<Array<{ lineId?: number; label: string; success: boolean; error?: string; keyCount?: number }>>([]);
@@ -199,11 +200,24 @@ export default function Page() {
   const now = Math.floor(Date.now() / 1000);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden relative">
+      {/* Mobile header */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 bg-background border-b border-border px-3 py-2 flex items-center gap-2">
+        <button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-muted-foreground hover:text-foreground p-1">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <h1 className="text-sm font-semibold">渠道上号中枢</h1>
+        <Badge variant="secondary" className="text-xs px-1.5 py-0 ml-auto">{poolN}</Badge>
+      </div>
+      {/* Sidebar overlay */}
+      {sidebarOpen && <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)} />}
       {/* Sidebar */}
-      <div className="w-[200px] flex-shrink-0 border-r border-border bg-muted/20 flex flex-col">
+      <div className={`w-[200px] flex-shrink-0 border-r border-border bg-muted/20 flex flex-col fixed md:static inset-y-0 left-0 z-50 transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="p-4 border-b border-border">
-          <h1 className="text-sm font-semibold">渠道上号中枢</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-sm font-semibold">渠道上号中枢</h1>
+            <button className="md:hidden text-muted-foreground" onClick={() => setSidebarOpen(false)}>✕</button>
+          </div>
           <div className="flex items-center gap-1.5 mt-1.5">
             <span className="text-xs text-muted-foreground">子弹:</span>
             <Badge variant="secondary" className="text-xs px-1.5 py-0">{poolN}</Badge>
@@ -212,7 +226,7 @@ export default function Page() {
         <div className="flex-1 overflow-y-auto py-2">
           <button
             className={`w-full text-left px-4 py-2 text-sm transition-colors ${showDashboard ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
-            onClick={() => { setShowDashboard(true); setLid(null); }}
+            onClick={() => { setShowDashboard(true); setLid(null); setSidebarOpen(false); }}
           >资源调度</button>
           <div className="px-4 py-1.5"><span className="text-[10px] text-muted-foreground uppercase tracking-wider">线路</span></div>
           {lines.map(l => {
@@ -221,7 +235,7 @@ export default function Page() {
             return (
               <button key={l.id}
                 className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between ${!showDashboard && l.id === lid ? "bg-primary/10 text-primary font-medium border-r-2 border-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted/40"}`}
-                onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); }}
+                onClick={() => { setShowDashboard(false); setLid(l.id); loadLine(l.id, lines); setSidebarOpen(false); }}
               >
                 <span className="truncate">{l.label}</span>
                 <span className="flex items-center gap-1 flex-shrink-0">
@@ -238,7 +252,7 @@ export default function Page() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-3 md:p-6 pt-14 md:pt-6">
       <div className="max-w-[900px] space-y-4">
 
       {/* Key Pool */}
@@ -283,7 +297,7 @@ export default function Page() {
             }}>+ 新建分组</Button>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {groupList.map(g => {
               const memberIds = new Set(g.lines.map(gl => gl.id));
               const groupLinesData = lines.filter(l => memberIds.has(l.id));
@@ -303,7 +317,7 @@ export default function Page() {
               });
 
               return (
-                <Card key={g.id} className={groupLinesData.length > 3 ? "lg:col-span-2" : ""}>
+                <Card key={g.id} className={groupLinesData.length > 3 ? "md:col-span-2" : ""}>
                   <CardContent className="pt-3 pb-3 space-y-3">
                     {/* A: Header */}
                     <div className="flex items-center gap-2">
@@ -412,7 +426,7 @@ export default function Page() {
               </button>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {[...lines].sort((a, b) => (a.config?.pinned === "1" ? 0 : 1) - (b.config?.pinned === "1" ? 0 : 1)).filter(l => showHidden || l.config?.hidden !== "1").map(l => {
               const lCfg = l.config || {};
               const mode = lCfg.importMode || "independent";
