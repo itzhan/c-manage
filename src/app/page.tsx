@@ -48,6 +48,9 @@ export default function Page() {
   const [autoBatch, setAutoBatch] = useState(10);
   const [impCount, setImpCount] = useState(10);
   const [impBusy, setImpBusy] = useState(false);
+
+  type DayStat = { date: string; totalKeys: number; totalQuota: number; disabledKeys: number; zeroQuotaKeys: number; batches: number };
+  const [dailyStats, setDailyStats] = useState<DayStat[]>([]);
   const [paused, setPaused] = useState(false);
   const [showAdv, setShowAdv] = useState(false);
 
@@ -83,13 +86,14 @@ export default function Page() {
   const fGroups = useCallback(async () => { const r = await fetch("/api/groups").then(r => r.json()); if (r.success) setGroupList(r.data); }, []);
   const fRecs = useCallback(async (id: number, p = 1) => { const r = await fetch(`/api/lines/${id}/records?page=${p}&pageSize=10`).then(r => r.json()); if (r.success) { setRecs(r.data.items); setRecTotal(r.data.total); setRecQuota(r.data.totalQuota); setRecKeys(r.data.totalKeys); } }, []);
   const fLogs = useCallback(async (id: number) => { const r = await fetch(`/api/lines/${id}/logs`).then(r => r.json()); if (r.success) setLogs(r.data); }, []);
+  const fDailyStats = useCallback(async (id: number) => { try { const r = await fetch(`/api/lines/${id}/daily-stats`).then(r => r.json()); if (r.success) setDailyStats(r.data); } catch { setDailyStats([]); } }, []);
 
   const loadLine = useCallback(async (id: number, lns: Line[]) => {
     const l = lns.find(x => x.id === id);
     if (l) { setCfg(l.config); setAutoOn(!!l.autoEnabled); setAutoBatch(l.autoBatchSize); }
-    await fRecs(id, 1); setPg(1); await fLogs(id);
+    await fRecs(id, 1); setPg(1); await fLogs(id); fDailyStats(id);
     if (l?.config?.importStrategy === "fixed_slots") fSlots(id);
-  }, [fRecs, fLogs, fSlots]);
+  }, [fRecs, fLogs, fSlots, fDailyStats]);
 
   useEffect(() => { (async () => { await fPool(); await fLines(); await fGroups(); })(); }, []);
 
@@ -107,10 +111,11 @@ export default function Page() {
     if (currentLid) {
       await fRecs(currentLid, currentPg);
       await fLogs(currentLid);
+      fDailyStats(currentLid);
       const l = ls.find((x: Line) => x.id === currentLid);
       if (l) { setCfg(l.config); setAutoOn(!!l.autoEnabled); }
     }
-  }, [fLines, fPool, fRecs, fLogs]);
+  }, [fLines, fPool, fRecs, fLogs, fDailyStats]);
 
   useEffect(() => {
     if (paused) return;
@@ -697,6 +702,46 @@ export default function Page() {
             </CardContent>
           </Card>
           )}
+
+          {/* Daily Stats */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">每日统计</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {dailyStats.length === 0 ? <p className="text-center text-muted-foreground text-sm py-4">暂无数据</p> : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>日期</TableHead>
+                      <TableHead>批次</TableHead>
+                      <TableHead>投入key</TableHead>
+                      <TableHead>禁用key</TableHead>
+                      <TableHead>0产出key</TableHead>
+                      <TableHead className="text-right">总额度</TableHead>
+                      <TableHead className="text-right">均值/key</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dailyStats.map(d => {
+                      const avgPerKey = d.totalKeys > 0 ? d.totalQuota / d.totalKeys : 0;
+                      return (
+                        <TableRow key={d.date}>
+                          <TableCell className="text-xs">{d.date}</TableCell>
+                          <TableCell className="text-xs tabular-nums">{d.batches}</TableCell>
+                          <TableCell className="text-xs tabular-nums">{d.totalKeys}</TableCell>
+                          <TableCell className={`text-xs tabular-nums ${d.disabledKeys > 0 ? "text-red-500" : "text-muted-foreground"}`}>{d.disabledKeys}</TableCell>
+                          <TableCell className={`text-xs tabular-nums ${d.zeroQuotaKeys > 0 ? "text-orange-500" : "text-muted-foreground"}`}>{d.zeroQuotaKeys}</TableCell>
+                          <TableCell className="text-right font-mono text-xs font-semibold">{fmtQ(d.totalQuota)}</TableCell>
+                          <TableCell className="text-right font-mono text-xs text-muted-foreground">{fmtQ(avgPerKey)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Connection Config */}
           <Card>
