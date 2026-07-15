@@ -123,12 +123,24 @@ export function buildZhongzhuanPayload(cfg: Record<string, string>, keys: string
   };
 }
 
+export function buildKeymanPayload(cfg: Record<string, string>, key: string) {
+  return {
+    name: cfg.channelName || "",
+    type: parseInt(cfg.channelType) || 14,
+    key: key.trim(),
+    models: cfg.models || "",
+    group: cfg.groups || "",
+    quota: "",
+  };
+}
+
 export function getImportEndpoint(cfg: Record<string, string>): string {
   const baseUrl = (cfg.baseUrl || "").replace(/\/+$/, "");
   if (cfg.platformType === "naci") return baseUrl + "/api/admin-hub/channels/";
   if (cfg.platformType === "sub2api") return baseUrl + "/api/user/api-keys";
   if (cfg.platformType === "keyhub") return baseUrl + "/keyhub/api/keys/import";
   if (cfg.platformType === "zhongzhuan") return baseUrl + "/api/channels/batch";
+  if (cfg.platformType === "keyman") return baseUrl + "/api/channels";
   return baseUrl + "/api/channel/";
 }
 
@@ -144,6 +156,8 @@ export function getAuthHeaders(cfg: Record<string, string>): Record<string, stri
     headers["Cookie"] = cfg.authValue || "";
   } else if (cfg.platformType === "zhongzhuan") {
     headers["Authorization"] = `Bearer ${cfg.authValue || ""}`;
+  } else if (cfg.platformType === "keyman") {
+    headers["Cookie"] = `km_session=${cfg.authValue || ""}`;
   } else {
     headers["New-API-User"] = cfg.newApiUser || "3";
     const cookie = getCookie(cfg);
@@ -186,6 +200,24 @@ async function importBatch(cfg: Record<string, string>, headers: Record<string, 
         const data = await resp.json();
         if (resp.ok && !data.error) success++;
       } catch { /* skip */ }
+    }
+    return { ok: success > 0, channelIds };
+  }
+
+  if (cfg.platformType === "keyman") {
+    let success = 0;
+    for (const key of importKeys) {
+      try {
+        const resp = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(buildKeymanPayload(cfg, key)) });
+        const data = await resp.json();
+        if (resp.ok && data.success !== false) {
+          success++;
+          if (data.data?.channel_id) channelIds.push(data.data.channel_id);
+        }
+        addLog(lineId, `[Keyman] ${resp.status} ${key.slice(-8)}: ${data.success ? '✓' : data.message || 'fail'}`, resp.ok ? "ok" : "err");
+      } catch (e: unknown) {
+        addLog(lineId, `[Keyman] 异常: ${e instanceof Error ? e.message : String(e)}`, "err");
+      }
     }
     return { ok: success > 0, channelIds };
   }
@@ -324,7 +356,9 @@ export function saveChannelSlots(lineId: number, channelIds: number[], name: str
 
 export function createRecordAndAdvanceName(lineId: number, cfg: Record<string, string>, useKeys: string[], strategy: string): string {
   const name = cfg.channelName || cfg.baseUrl || "";
-  db.insert(records).values({ lineId, name, keyCount: useKeys.length }).run();
+  let keyCount = useKeys.length;
+  if (strategy === "overlap") keyCount *= parseInt(cfg.overlapMultiplier) || 2;
+  db.insert(records).values({ lineId, name, keyCount }).run();
   if (strategy !== "rotate" && cfg.fixedName !== "1" && cfg.channelName) {
     const nextName = incrementName(cfg.channelName);
     cfg.channelName = nextName;
